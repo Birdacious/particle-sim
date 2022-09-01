@@ -1,3 +1,3 @@
 run:
-	gcc -o out main.c -lglfw -lvulkan
+	gcc -o out main.c -lglfw -lvulkan -DDEBUG
 	./out
