@@ -31,6 +31,7 @@ const uint32_t WIDTH  = 800;
 const uint32_t HEIGHT = 600;
 GLFWwindow* window;
 VkInstance instance;
+VkPhysicalDevice physical_dev = VK_NULL_HANDLE;
 
 
 GLFWwindow* initWindow() {
@@ -73,8 +74,53 @@ void createInstance() {
 	if(vkCreateInstance(&create_info, NULL, &instance) != VK_SUCCESS) printf("ono");
 }
 
+void pickPhysicalDevice() {
+	uint32_t n_dev=0;
+	vkEnumeratePhysicalDevices(instance, &n_dev, NULL);
+	if(n_dev==0) {printf("No Vulkan-compatible GPUs! :(");}
+	VkPhysicalDevice devs[n_dev];
+	vkEnumeratePhysicalDevices(instance, &n_dev, devs);
+
+	typedef struct { uint32_t graphicsFamily; } QueueFamilyIndices;
+
+	QueueFamilyIndices findQueueFamilies(VkPhysicalDevice dev) {
+		QueueFamilyIndices inds; inds.graphicsFamily=UINT32_MAX; // If it's still max int after we ask for the index, the queue family probably doesn't exist (b/c I'm guessing the index won't be max int)
+		uint32_t n_queue_fam=0;
+		vkGetPhysicalDeviceQueueFamilyProperties(dev, &n_queue_fam, NULL);
+		VkQueueFamilyProperties queue_fams[n_queue_fam];
+		vkGetPhysicalDeviceQueueFamilyProperties(dev, &n_queue_fam, queue_fams);
+
+		int graphics_ind=0;
+		for(int i=0; i<n_queue_fam; i++) {
+			if(queue_fams[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) inds.graphicsFamily = graphics_ind; 
+			graphics_ind++;
+		}
+
+		return inds;
+	}
+	
+	bool isDeviceSuitable(VkPhysicalDevice dev) {
+		// There's plenty you could do here to select the device you want, but idc.
+		//VkPhysicalDeviceProperties          dev_properties;
+		//VkPhysicalDeviceFeatures            dev_features;
+		//vkGetPhysicalDeviceProperties(dev, &dev_properties);
+		//vkGetPhysicalDeviceFeatures  (dev, &dev_features);
+
+		QueueFamilyIndices inds = findQueueFamilies(dev);
+
+		return inds.graphicsFamily != UINT32_MAX;
+	}
+
+	for(uint32_t i=0; i<n_dev; i++) {
+		VkPhysicalDevice dev = devs[i];
+		if(isDeviceSuitable(dev)) {physical_dev = dev; break;}
+		if(physical_dev == VK_NULL_HANDLE) {printf("No suitable GPUs! :(");}
+	}
+}
+
 void initVulkan() {
 	createInstance();
+	pickPhysicalDevice();
 }
 
 void mainLoop() {
