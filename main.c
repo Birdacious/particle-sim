@@ -32,6 +32,8 @@ const uint32_t HEIGHT = 600;
 GLFWwindow* window;
 VkInstance instance;
 VkPhysicalDevice physical_dev = VK_NULL_HANDLE;
+VkDevice dev;
+VkQueue graphics_queue;
 
 
 GLFWwindow* initWindow() {
@@ -74,6 +76,23 @@ void createInstance() {
 	if(vkCreateInstance(&create_info, NULL, &instance) != VK_SUCCESS) printf("ono");
 }
 
+typedef struct { uint32_t graphicsFamily; } QueueFamilyIndices;
+QueueFamilyIndices findQueueFamilies(VkPhysicalDevice dev) {
+	QueueFamilyIndices inds; inds.graphicsFamily=UINT32_MAX; // If it's still max int after we ask for the index, the queue family probably doesn't exist (b/c I'm guessing the index won't be max int)
+	uint32_t n_queue_fam=0;
+	vkGetPhysicalDeviceQueueFamilyProperties(dev, &n_queue_fam, NULL);
+	VkQueueFamilyProperties queue_fams[n_queue_fam];
+	vkGetPhysicalDeviceQueueFamilyProperties(dev, &n_queue_fam, queue_fams);
+
+	int graphics_ind=0;
+	for(int i=0; i<n_queue_fam; i++) {
+		if(queue_fams[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) inds.graphicsFamily = graphics_ind; 
+		graphics_ind++;
+	}
+
+	return inds;
+}
+	
 void pickPhysicalDevice() {
 	uint32_t n_dev=0;
 	vkEnumeratePhysicalDevices(instance, &n_dev, NULL);
@@ -81,24 +100,6 @@ void pickPhysicalDevice() {
 	VkPhysicalDevice devs[n_dev];
 	vkEnumeratePhysicalDevices(instance, &n_dev, devs);
 
-	typedef struct { uint32_t graphicsFamily; } QueueFamilyIndices;
-
-	QueueFamilyIndices findQueueFamilies(VkPhysicalDevice dev) {
-		QueueFamilyIndices inds; inds.graphicsFamily=UINT32_MAX; // If it's still max int after we ask for the index, the queue family probably doesn't exist (b/c I'm guessing the index won't be max int)
-		uint32_t n_queue_fam=0;
-		vkGetPhysicalDeviceQueueFamilyProperties(dev, &n_queue_fam, NULL);
-		VkQueueFamilyProperties queue_fams[n_queue_fam];
-		vkGetPhysicalDeviceQueueFamilyProperties(dev, &n_queue_fam, queue_fams);
-
-		int graphics_ind=0;
-		for(int i=0; i<n_queue_fam; i++) {
-			if(queue_fams[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) inds.graphicsFamily = graphics_ind; 
-			graphics_ind++;
-		}
-
-		return inds;
-	}
-	
 	bool isDeviceSuitable(VkPhysicalDevice dev) {
 		// There's plenty you could do here to select the device you want, but idc.
 		//VkPhysicalDeviceProperties          dev_properties;
@@ -118,9 +119,37 @@ void pickPhysicalDevice() {
 	}
 }
 
+void createLogicalDevice() {
+	QueueFamilyIndices inds = findQueueFamilies(physical_dev);
+	float queuePriority = 1.0f;
+	VkDeviceQueueCreateInfo queue_create_info = (VkDeviceQueueCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+		.queueFamilyIndex = inds.graphicsFamily,
+		.queueCount = 1,
+		.pQueuePriorities = &queuePriority
+	};
+	VkPhysicalDeviceFeatures dev_features;
+
+	VkDeviceCreateInfo create_info = (VkDeviceCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+		.pQueueCreateInfos = &queue_create_info,
+		.queueCreateInfoCount = 1,
+		.pEnabledFeatures = NULL,
+		.enabledExtensionCount = 0
+	};
+	#ifdef DEBUG
+	create_info.enabledLayerCount = n_val_lyrs; // Vulkan no longer makes distinction between instance and dev-specific validation layers, but for back-comp we include this anyway
+	create_info.ppEnabledLayerNames = validation_layers; // ^
+	#endif
+
+	if(vkCreateDevice(physical_dev, &create_info, NULL, &dev)) printf("Failed to create logical device! :(");
+	vkGetDeviceQueue(dev, inds.graphicsFamily, 0, &graphics_queue);
+}
+
 void initVulkan() {
 	createInstance();
 	pickPhysicalDevice();
+	createLogicalDevice();
 }
 
 void mainLoop() {
@@ -130,6 +159,7 @@ void mainLoop() {
 }
 
 void cleanup() {
+	vkDestroyDevice(dev,NULL);
 	vkDestroyInstance(instance,NULL);
 	glfwDestroyWindow(window);
 	glfwTerminate();
