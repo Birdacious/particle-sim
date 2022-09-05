@@ -8,8 +8,8 @@
 
 // define "DEBUG" during compilation to use validation layers
 // TODO: There's an extra part in the tut about Message Callbacks but idc rn
-#define n_val_lyrs 1
-const char* validation_layers[n_val_lyrs] = {
+#define n_req_val_lyrs 1
+const char* req_validation_layers[n_req_val_lyrs] = {
 	"VK_LAYER_KHRONOS_validation"
 };
 
@@ -19,9 +19,9 @@ bool checkValidationLayerSupport() {
 	VkLayerProperties available_layers[layer_count];
 	vkEnumerateInstanceLayerProperties(&layer_count,available_layers);
 
-	for(  uint32_t i=0; i<n_val_lyrs ; i++) { bool layer_found=false;
+	for(  uint32_t i=0; i<n_req_val_lyrs ; i++) { bool layer_found=false;
 		for(uint32_t j=0; j<layer_count; j++) {
-			if(strcmp(validation_layers[i], available_layers[j].layerName) == 0) {
+			if(strcmp(req_validation_layers[i], available_layers[j].layerName) == 0) {
 				layer_found=true; break;} }
 		if(!layer_found) return false; }
 	return true;
@@ -36,6 +36,10 @@ VkDevice dev;
 VkQueue graphics_queue;
 VkQueue present_queue;
 VkSurfaceKHR surface;
+VkSwapchainKHR swapchain;
+VkImage* swapchain_images;
+VkFormat swapchain_image_format;
+VkExtent2D swapchain_extent;
 
 
 GLFWwindow* initWindow() {
@@ -71,8 +75,8 @@ void createInstance() {
 	.ppEnabledLayerNames = NULL                    };
 
 	#ifdef DEBUG
-	create_info.enabledLayerCount = n_val_lyrs;
-	create_info.ppEnabledLayerNames = validation_layers;
+	create_info.enabledLayerCount = n_req_val_lyrs;
+	create_info.ppEnabledLayerNames = req_validation_layers;
 	#endif
 
 	if(vkCreateInstance(&create_info, NULL, &instance) != VK_SUCCESS) printf("ono");
@@ -107,6 +111,50 @@ void findQueueFamilies(VkPhysicalDevice phys_dev, QueueFamilyIndices* inds) {
 	}
 }
 
+#define n_req_extensions 1
+const char* req_device_extensions[n_req_extensions] = {
+	VK_KHR_SWAPCHAIN_EXTENSION_NAME
+};
+bool checkDeviceExtensionSupport(VkPhysicalDevice phys_dev) {
+	uint32_t extension_count;
+	vkEnumerateDeviceExtensionProperties(phys_dev, NULL, &extension_count, NULL);
+	VkExtensionProperties available_extensions[extension_count];
+	vkEnumerateDeviceExtensionProperties(phys_dev, NULL, &extension_count, available_extensions);
+
+	for(  uint32_t i=0; i<n_req_extensions ; i++) { bool extension_found=false;
+		for(uint32_t j=0; j<extension_count; j++) {
+			if(strcmp(req_device_extensions[i], available_extensions[j].extensionName) == 0) {
+				extension_found=true; break;} }
+		if(!extension_found) return false; }
+	return true;
+}
+
+typedef struct {
+	VkSurfaceCapabilitiesKHR capabilities;
+	VkSurfaceFormatKHR* formats;           uint32_t n_format;
+	VkPresentModeKHR* presentModes;        uint32_t n_presentMode;
+} SwapchainSupportDetails;
+
+SwapchainSupportDetails querySwapchainSupport(VkPhysicalDevice phys_dev) {
+	SwapchainSupportDetails details;
+
+	vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_dev, surface, &details.capabilities);
+
+	vkGetPhysicalDeviceSurfaceFormatsKHR(phys_dev, surface, &details.n_format, NULL);
+	if(details.n_format != 0) {
+		details.formats = malloc(sizeof(VkSurfaceFormatKHR)*details.n_format); // MALLOC'D formats
+		vkGetPhysicalDeviceSurfaceFormatsKHR(phys_dev, surface, &details.n_format, details.formats);
+	}
+
+	vkGetPhysicalDeviceSurfacePresentModesKHR(phys_dev, surface, &details.n_presentMode, NULL);
+	if(details.n_presentMode != 0) {
+		details.presentModes = malloc(sizeof(VkSurfaceFormatKHR)*details.n_presentMode); //MALLOC'D presentModes
+		vkGetPhysicalDeviceSurfacePresentModesKHR(phys_dev, surface, &details.n_presentMode, details.presentModes);
+	}
+
+	return details;
+}
+
 bool isDeviceSuitable(VkPhysicalDevice phys_dev) {
 	// There's plenty you could do here to select the device you want, but idc.
 	//VkPhysicalDeviceProperties          dev_properties;
@@ -115,12 +163,62 @@ bool isDeviceSuitable(VkPhysicalDevice phys_dev) {
 	//vkGetPhysicalDeviceFeatures  (dev, &dev_features);
 
 	QueueFamilyIndices inds; findQueueFamilies(phys_dev, &inds);
+
+	bool supports_extensions = checkDeviceExtensionSupport(phys_dev);
+
+	bool swapchain_adequate = false;
+	if(supports_extensions) {
+		SwapchainSupportDetails swapchain_support = querySwapchainSupport(phys_dev);
+		swapchain_adequate = swapchain_support.n_format>0 && swapchain_support.n_presentMode>0;
+	}
 	
 	printf("%u, %u, %u\n", inds.graphicsFamily, inds.presentFamily, UINT32_MAX);
 	puts(inds.graphicsFamily == UINT32_MAX ? "no g" : "yes g");
 	puts(inds.presentFamily  == UINT32_MAX ? "no p" : "yes p");
 	puts(inds.presentFamily != UINT32_MAX && inds.graphicsFamily != UINT32_MAX ? "yay" : "nay");
-	return (inds.graphicsFamily != UINT32_MAX && inds.presentFamily != UINT32_MAX);
+	return (inds.graphicsFamily != UINT32_MAX &&
+			    inds.presentFamily != UINT32_MAX &&
+					supports_extensions &&
+					swapchain_adequate);
+}
+
+VkSurfaceFormatKHR chooseSwapSurfaceFormat(const VkSurfaceFormatKHR available_formats[], uint32_t n_formats) {
+	for(uint32_t i=0; i<n_formats; i++) {
+		if(available_formats[i].format     == VK_FORMAT_B8G8R8A8_SRGB &&
+		   available_formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+			return available_formats[i];
+	}
+	return available_formats[0]; // If ideal B8G8R8A8 SRGB format not found, just w/e first one please.
+}
+
+VkPresentModeKHR chooseSwapPresentMode(const VkPresentModeKHR available_presentModes[], uint32_t n_presentModes) {
+	for(uint32_t i=0; i<n_presentModes; i++) {
+		if(available_presentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR) return available_presentModes[i];
+	}
+	return VK_PRESENT_MODE_FIFO_KHR;
+	// See tut for more info about the 4 different present modes and which one for which situation! It's cool.
+}
+
+VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR capabilities) {
+	if(capabilities.currentExtent.width != UINT32_MAX) {
+		return capabilities.currentExtent;
+	} else {
+		int width, height;
+		glfwGetFramebufferSize(window, &width, &height);
+
+		VkExtent2D actual_extent = { (uint32_t)width, (uint32_t)height };
+
+		printf("%d, %d\n", actual_extent.width, actual_extent.height);
+		uint32_t w,h,miw,maw,mih,mah;
+		  w = actual_extent.width;                   h = actual_extent.height;
+		miw = capabilities.minImageExtent.width; mih = capabilities.minImageExtent.height;
+		maw = capabilities.minImageExtent.width; mah = capabilities.minImageExtent.height;
+
+		actual_extent.width  = w > miw ? (w < maw ? w : maw) : miw;
+		actual_extent.height = h > mih ? (h < mah ? h : mah) : mih; // basically clamp width&height between min&max
+
+		return actual_extent;
+	}
 }
 
 void pickPhysicalDevice() {
@@ -162,11 +260,12 @@ void createLogicalDevice() {
 		.queueCreateInfoCount = 1,
 		.pQueueCreateInfos = queue_create_infos,
 		.pEnabledFeatures = NULL,
-		.enabledExtensionCount = 0
+		.enabledExtensionCount = n_req_extensions,
+		.ppEnabledExtensionNames = req_device_extensions
 	};
 	#ifdef DEBUG
-	create_info.enabledLayerCount = n_val_lyrs; // Vulkan no longer makes distinction between instance and dev-specific validation layers, but for back-comp we include this anyway
-	create_info.ppEnabledLayerNames = validation_layers; // ^
+	create_info.enabledLayerCount = n_req_val_lyrs; // Vulkan no longer makes distinction between instance and dev-specific validation layers, but for back-comp we include this anyway
+	create_info.ppEnabledLayerNames = req_validation_layers; // ^
 	#endif
 
 	if(vkCreateDevice(physical_dev, &create_info, NULL, &dev)) printf("Failed to create logical device! :(");
@@ -178,11 +277,60 @@ void createLogicalDevice() {
 		// In the tutorial they used a C++ set (I don't have in plain C) to deal w/ this elegantly but I'm lazy so I skipped it.
 }
 
+void createSwapchain() {
+	SwapchainSupportDetails swapchainSupport = querySwapchainSupport(physical_dev);
+	VkSurfaceFormatKHR surface_format = chooseSwapSurfaceFormat(swapchainSupport.formats, swapchainSupport.n_format);
+	VkPresentModeKHR present_mode = chooseSwapPresentMode(swapchainSupport.presentModes, swapchainSupport.n_presentMode);
+	VkExtent2D extent = chooseSwapExtent(swapchainSupport.capabilities);
+
+	uint32_t n_image = swapchainSupport.capabilities.minImageCount + 1;
+	if(swapchainSupport.capabilities.maxImageCount > 0 && n_image > swapchainSupport.capabilities.maxImageCount)
+		n_image = swapchainSupport.capabilities.maxImageCount;
+
+	VkSwapchainCreateInfoKHR create_info = (VkSwapchainCreateInfoKHR){
+		.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+		.surface = surface,
+		.minImageCount = n_image,
+		.imageFormat = surface_format.format,
+		.imageColorSpace = surface_format.colorSpace,
+		.imageExtent = extent,
+		.imageArrayLayers = 1,
+		.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, // means will render directly to the images in the swap chain. VK_IMAGE_USAGE_TRANSFER_DST_BIT instead if you wanna do post-processing. See tut.
+		.preTransform = swapchainSupport.capabilities.currentTransform,
+		.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+		.presentMode = present_mode,
+		.clipped = VK_TRUE,
+		.oldSwapchain = VK_NULL_HANDLE,
+		
+		.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+		.queueFamilyIndexCount=0, // optional, if graphics & present family index is the same
+		.pQueueFamilyIndices=NULL // ^
+	};
+	QueueFamilyIndices inds; findQueueFamilies(physical_dev, &inds);
+	uint32_t tmp[2] = {inds.graphicsFamily, inds.presentFamily};
+	if(inds.graphicsFamily != inds.presentFamily) {
+		create_info.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+		create_info.queueFamilyIndexCount = 2;
+		create_info.pQueueFamilyIndices = tmp;
+	}
+
+	if(vkCreateSwapchainKHR(dev, &create_info, NULL, &swapchain) != VK_SUCCESS) printf("Swapchain creation failed! :(");
+
+	vkGetSwapchainImagesKHR(dev, swapchain, &n_image, NULL);
+	swapchain_images = malloc(sizeof(VkImage)*n_image);
+	vkGetSwapchainImagesKHR(dev, swapchain, &n_image, swapchain_images);
+
+	swapchain_image_format = surface_format.format;
+	swapchain_extent = extent;
+}
+
+
 void initVulkan() {
 	createInstance();
 	createSurface();
 	pickPhysicalDevice();
 	createLogicalDevice();
+	createSwapchain();
 }
 
 void mainLoop() {
@@ -192,6 +340,7 @@ void mainLoop() {
 }
 
 void cleanup() {
+	vkDestroySwapchainKHR(dev,swapchain,NULL);
 	vkDestroyDevice(dev,NULL);
 	vkDestroySurfaceKHR(instance,surface,NULL);
 	vkDestroyInstance(instance,NULL);
