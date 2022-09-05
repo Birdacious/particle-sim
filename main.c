@@ -40,6 +40,7 @@ VkSwapchainKHR swapchain;
 VkImage* swapchain_images;
 VkFormat swapchain_image_format;
 VkExtent2D swapchain_extent;
+VkImageView* swapchain_image_views;
 
 
 GLFWwindow* initWindow() {
@@ -135,6 +136,8 @@ typedef struct {
 	VkPresentModeKHR* presentModes;        uint32_t n_presentMode;
 } SwapchainSupportDetails;
 
+// NOTE NOTE NOTE NOTE: I believe this is an issue: "details" is malloc'd several times
+// b/c querySwapchainSupport is used several times.
 SwapchainSupportDetails querySwapchainSupport(VkPhysicalDevice phys_dev) {
 	SwapchainSupportDetails details;
 
@@ -170,6 +173,7 @@ bool isDeviceSuitable(VkPhysicalDevice phys_dev) {
 	if(supports_extensions) {
 		SwapchainSupportDetails swapchain_support = querySwapchainSupport(phys_dev);
 		swapchain_adequate = swapchain_support.n_format>0 && swapchain_support.n_presentMode>0;
+		free(swapchain_support.formats); free(swapchain_support.presentModes);
 	}
 	
 	printf("%u, %u, %u\n", inds.graphicsFamily, inds.presentFamily, UINT32_MAX);
@@ -315,13 +319,49 @@ void createSwapchain() {
 	}
 
 	if(vkCreateSwapchainKHR(dev, &create_info, NULL, &swapchain) != VK_SUCCESS) printf("Swapchain creation failed! :(");
+	free(swapchainSupport.formats); free(swapchainSupport.presentModes);
 
 	vkGetSwapchainImagesKHR(dev, swapchain, &n_image, NULL);
-	swapchain_images = malloc(sizeof(VkImage)*n_image);
+	swapchain_images = malloc(sizeof(VkImage)*n_image); // MALLOC'D swapchain_images
 	vkGetSwapchainImagesKHR(dev, swapchain, &n_image, swapchain_images);
 
 	swapchain_image_format = surface_format.format;
 	swapchain_extent = extent;
+}
+
+// NOTE NOTE NOTE NOTE Destroy is giving validation layers error that the VkImageView handle is not valid.
+// I tried only destroying swapchain_image_views[0], and it also has an error, so ALL the VkImageViews in the array are bad I guess.
+// I tried messing with the VkImageViewCreateInfo and messing it up, and it still only complains on Destroy. So there could be s/t wrong when creating.
+//   I.e. there is no check if the create_info is valid yet, it seems.
+//   So there could be s/t wrong in the create info but it's hard to know.
+//     I don't think swapchain_image_format is getting out of scope.
+//     My guess is s/t in the swapchain_images[] is wrong?
+//     or some simple insidious mispelling?
+// Remember to uncomment the for loop to Destroy ALL imageViews when you do figure this out.
+void createImageViews() {
+	uint32_t n_image = vkGetSwapchainImagesKHR(dev, swapchain, &n_image, NULL);
+	// ^ I should just make n_image a global at this point
+	swapchain_image_views = malloc(sizeof(VkImageView) * n_image); // MALLOC'D swapchain_image_views
+	for(size_t i=0; i < n_image; i++) {
+		VkImageViewCreateInfo create_info = (VkImageViewCreateInfo){
+			.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+			.image = swapchain_images[i],
+			.viewType = VK_IMAGE_VIEW_TYPE_2D,
+			.format = swapchain_image_format,
+			.components.r = VK_COMPONENT_SWIZZLE_IDENTITY,
+			.components.g = VK_COMPONENT_SWIZZLE_IDENTITY,
+			.components.b = VK_COMPONENT_SWIZZLE_IDENTITY,
+			.components.a = VK_COMPONENT_SWIZZLE_IDENTITY, // try changing these for fun!
+			.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+			.subresourceRange.baseMipLevel = 0,
+			.subresourceRange.levelCount = 1,
+			.subresourceRange.baseArrayLayer = 0,
+			.subresourceRange.layerCount = 1,
+			.flags = 0,
+			.pNext = NULL
+		};
+		if(vkCreateImageView(dev, &create_info, NULL, &swapchain_image_views[i]) != VK_SUCCESS) printf("Swapchain image view (index %lu) creation failed! :(",i);
+	}
 }
 
 
@@ -331,6 +371,7 @@ void initVulkan() {
 	pickPhysicalDevice();
 	createLogicalDevice();
 	createSwapchain();
+	createImageViews();
 }
 
 void mainLoop() {
@@ -340,6 +381,12 @@ void mainLoop() {
 }
 
 void cleanup() {
+	//TODO ImageViews invalid accorind to validation layers when getting destroyed apparently? idk.
+	uint32_t n_image; // Yep should probably just be a global
+	vkGetSwapchainImagesKHR(dev, swapchain, &n_image, NULL);
+//	/*for(uint32_t i=0; i<n_image; i++)*/ vkDestroyImageView(dev,swapchain_image_views[0],NULL);
+	free(swapchain_image_views); swapchain_image_views = VK_NULL_HANDLE;
+
 	vkDestroySwapchainKHR(dev,swapchain,NULL);
 	vkDestroyDevice(dev,NULL);
 	vkDestroySurfaceKHR(instance,surface,NULL);
