@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+// #include <shaderc/shaderc.h>
 
 // define "DEBUG" during compilation to use validation layers
 // TODO: There's an extra part in the tut about Message Callbacks but idc rn
@@ -365,6 +366,71 @@ void createImageViews() {
 }
 
 
+// TODO: Failed attempt to get shaderc working (integrated glsl compilation)
+//void compileGlsl2Svp(char* source, shaderc_shader_kind kind) {
+//	const shaderc_compiler_t compiler;// = shaderc_compiler_initialize();
+//	shaderc_compile_options_t options;// = shaderc_compile_options_initialize();
+//	shaderc_compile_options_set_optimization_level(options, shaderc_optimization_level_size); // there's also "_performance" instead of "_size"
+//	
+//}
+
+char* readFile(char* filenm, unsigned long* sz) {
+	char* buf = NULL;
+	FILE* f = fopen(filenm,"rb");
+	if(f!=NULL) if(fseek(f,0,SEEK_END)==0) {
+		size_t bufsz=ftell(f);  if(bufsz==-1) printf("AHHHH");
+		buf = malloc(bufsz+1); if(!buf)     printf("Mem error!");  // MALLOC'D shader file contents
+		if(fseek(f,0,SEEK_SET)!=0)          printf("AHHHH2");
+		fread(buf,1,bufsz,f);
+		//printf("BUFSZ: %ld",bufsz);
+		*sz = bufsz;
+		return buf;
+	}
+	return NULL;
+}
+
+VkShaderModule createShaderModule(const char* shdr_code, unsigned long code_sz) {
+	VkShaderModuleCreateInfo create_info = (VkShaderModuleCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+		.codeSize = code_sz,
+		.pCode = (uint32_t*)shdr_code
+	};
+	VkShaderModule shdr_module;
+	if(vkCreateShaderModule(dev, &create_info, NULL, &shdr_module)) printf("Failed 2 create shader module");
+	return shdr_module;
+}
+
+void createGraphicsPipeline() {
+	unsigned long vert_shdr_sz, frag_shdr_sz;
+	char* vert_shdr_code = readFile("shaders/vert.spv",&vert_shdr_sz);
+	char* frag_shdr_code = readFile("shaders/frag.spv",&frag_shdr_sz);
+
+	VkShaderModule vert_shdr_module = createShaderModule(vert_shdr_code,vert_shdr_sz);
+	VkShaderModule frag_shdr_module = createShaderModule(frag_shdr_code,frag_shdr_sz);
+
+	VkPipelineShaderStageCreateInfo vert_shdr_stage_info = (VkPipelineShaderStageCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+		.stage = VK_SHADER_STAGE_VERTEX_BIT,
+		.module = vert_shdr_module,
+		.pName = "main",
+		.pSpecializationInfo = NULL // allows specify values for shader constants, e.g. could use a single shader module where behavior configured @ pipeline creation by specifying different constants here, possibly more efficient
+	};
+	VkPipelineShaderStageCreateInfo frag_shdr_stage_info = (VkPipelineShaderStageCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+		.stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+		.module = frag_shdr_module,
+		.pName = "main",
+		.pSpecializationInfo = NULL
+	};
+
+	VkPipelineShaderStageCreateInfo shdr_stages[] = {vert_shdr_stage_info, frag_shdr_stage_info};
+
+	vkDestroyShaderModule(dev,vert_shdr_module,NULL);
+	vkDestroyShaderModule(dev,frag_shdr_module,NULL);
+
+}
+
+
 void initVulkan() {
 	createInstance();
 	createSurface();
@@ -372,6 +438,7 @@ void initVulkan() {
 	createLogicalDevice();
 	createSwapchain();
 	createImageViews();
+	createGraphicsPipeline();
 }
 
 void mainLoop() {
