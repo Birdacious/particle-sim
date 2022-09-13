@@ -46,6 +46,8 @@ VkRenderPass render_pass;
 VkPipelineLayout pipeline_layout;
 VkPipeline graphics_pipeline;
 VkFramebuffer* swapchain_framebuffers;
+VkCommandPool command_pool;
+VkCommandBuffer command_buffer;
 
 
 GLFWwindow* initWindow() {
@@ -484,18 +486,18 @@ void createGraphicsPipeline() {
 		.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, // plenty of ways to optimize vertices w/ different options here
 		.primitiveRestartEnable = VK_FALSE
 	};
-	VkViewport viewport = (VkViewport){
-		.x=0.f,
-		.y=0.f,
-    .width=(float)swapchain_extent.width,
-		.height=(float)swapchain_extent.height,
-		.minDepth = 0.f,
-		.maxDepth = 1.f
-	};
-	VkRect2D scissor = (VkRect2D){
-		.offset = {0,0},
-		.extent = swapchain_extent
-	};
+//	VkViewport viewport = (VkViewport){
+//		.x=0.f,
+//		.y=0.f,
+//    .width=(float)swapchain_extent.width,
+//		.height=(float)swapchain_extent.height,
+//		.minDepth = 0.f,
+//		.maxDepth = 1.f
+//	};
+//	VkRect2D scissor = (VkRect2D){
+//		.offset = {0,0},
+//		.extent = swapchain_extent
+//	};
 	VkPipelineViewportStateCreateInfo viewport_state_create_info = (VkPipelineViewportStateCreateInfo){
 		.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
 		.viewportCount = 1,
@@ -622,6 +624,66 @@ void createFrameBuffers() {
 	}
 }
 
+void createCommandPool() {
+	QueueFamilyIndices inds; findQueueFamilies(physical_dev, &inds);
+	VkCommandPoolCreateInfo pool_info = (VkCommandPoolCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+		.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+		.queueFamilyIndex = inds.graphicsFamily
+	};
+	if(vkCreateCommandPool(dev, &pool_info, NULL, &command_pool) != VK_SUCCESS) printf("Failed to create command pool! :(");
+}
+
+void createCommandBuffer() {
+	VkCommandBufferAllocateInfo alloc_info = (VkCommandBufferAllocateInfo){
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+		.commandPool = command_pool,
+		.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, // Specifies if primary or secondary command buffer. Secondary cannot be submitted to queue directly, but can be called from primary cmd buffers.
+		.commandBufferCount = 1
+	};
+	if(vkAllocateCommandBuffers(dev, &alloc_info, &command_buffer) != VK_SUCCESS) printf("Failed to allocate command buffers! :(");
+}
+
+void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
+	VkCommandBufferBeginInfo begin_info = (VkCommandBufferBeginInfo) {
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+		.flags = 0, // NOTE: see tut for possible flags and what they mean
+		.pInheritanceInfo = NULL // For 2ndary cmd bufs. Says which state to inherit from the calling primary cmd bufs.
+	};
+	if(vkBeginCommandBuffer(cb,&begin_info) != VK_SUCCESS) printf("Failed to begin recording cmd buffer! :(");
+
+	VkClearValue clear_color = {{{0.f,0.f,0.f,1.f}}};
+	VkRenderPassBeginInfo render_pass_begin_info = (VkRenderPassBeginInfo){
+		.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+		.renderPass = render_pass,
+		.framebuffer = swapchain_framebuffers[image_ind],
+		.renderArea.offset = {0,0},
+		.renderArea.extent = swapchain_extent,
+		.clearValueCount = 1,
+		.pClearValues = &clear_color // defines the clear values to use for VK_ATTACHMENT_LOAD_OP_CLEAR
+	};
+
+	vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
+	vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipeline); // Could specify a compute pipeline insead of graphics...
+	// We specified viewport and scissor to be dynamic so we set them here.
+	VkViewport viewport = (VkViewport){
+		.x=0.f,
+		.y=0.f,
+    .width=(float)swapchain_extent.width,
+		.height=(float)swapchain_extent.height,
+		.minDepth = 0.f,
+		.maxDepth = 1.f
+	};
+	vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+	VkRect2D scissor = (VkRect2D){
+		.offset = {0,0},
+		.extent = swapchain_extent
+	};
+	vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+	vkCmdDraw(command_buffer, 3, 1, 0, 0); // args: cb, vertexCount, instanceCount, firstVertex (lowest val of gl_VertexIndex), firstInstance
+	vkCmdEndRenderPass(command_buffer);
+	if(vkEndCommandBuffer(command_buffer) != VK_SUCCESS) printf("Failed to record command buffer! :(");
+}
 
 void initVulkan() {
 	createInstance();
@@ -633,6 +695,8 @@ void initVulkan() {
 	createRenderPass();
 	createGraphicsPipeline();
 	createFrameBuffers();
+	createCommandPool();
+	createCommandBuffer();
 }
 
 void mainLoop() {
@@ -642,6 +706,7 @@ void mainLoop() {
 }
 
 void cleanup() {
+	vkDestroyCommandPool(dev,command_pool,NULL);
 	for(uint32_t i=0; i<n_image; i++) {
 		vkDestroyFramebuffer(dev,swapchain_framebuffers[i],NULL);
 	}
