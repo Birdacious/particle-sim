@@ -38,13 +38,14 @@ VkQueue graphics_queue;
 VkQueue present_queue;
 VkSurfaceKHR surface;
 VkSwapchainKHR swapchain;
-VkImage* swapchain_images;
+VkImage* swapchain_images; uint32_t n_image;
 VkFormat swapchain_image_format;
 VkExtent2D swapchain_extent;
 VkImageView* swapchain_image_views;
 VkRenderPass render_pass;
 VkPipelineLayout pipeline_layout;
 VkPipeline graphics_pipeline;
+VkFramebuffer* swapchain_framebuffers;
 
 
 GLFWwindow* initWindow() {
@@ -140,8 +141,6 @@ typedef struct {
 	VkPresentModeKHR* presentModes;        uint32_t n_presentMode;
 } SwapchainSupportDetails;
 
-// NOTE NOTE NOTE NOTE: I believe this is an issue: "details" is malloc'd several times
-// b/c querySwapchainSupport is used several times.
 SwapchainSupportDetails querySwapchainSupport(VkPhysicalDevice phys_dev) {
 	SwapchainSupportDetails details;
 
@@ -177,7 +176,7 @@ bool isDeviceSuitable(VkPhysicalDevice phys_dev) {
 	if(supports_extensions) {
 		SwapchainSupportDetails swapchain_support = querySwapchainSupport(phys_dev);
 		swapchain_adequate = swapchain_support.n_format>0 && swapchain_support.n_presentMode>0;
-		free(swapchain_support.formats); free(swapchain_support.presentModes);
+		free(swapchain_support.formats); free(swapchain_support.presentModes); // FREE'D swapchain_support
 	}
 	
 	printf("%u, %u, %u\n", inds.graphicsFamily, inds.presentFamily, UINT32_MAX);
@@ -291,7 +290,7 @@ void createSwapchain() {
 	VkPresentModeKHR present_mode = chooseSwapPresentMode(swapchainSupport.presentModes, swapchainSupport.n_presentMode);
 	VkExtent2D extent = chooseSwapExtent(swapchainSupport.capabilities);
 
-	uint32_t n_image = swapchainSupport.capabilities.minImageCount + 1;
+	n_image = swapchainSupport.capabilities.minImageCount + 1;
 	if(swapchainSupport.capabilities.maxImageCount > 0 && n_image > swapchainSupport.capabilities.maxImageCount)
 		n_image = swapchainSupport.capabilities.maxImageCount;
 
@@ -323,7 +322,7 @@ void createSwapchain() {
 	}
 
 	if(vkCreateSwapchainKHR(dev, &create_info, NULL, &swapchain) != VK_SUCCESS) printf("Swapchain creation failed! :(");
-	free(swapchainSupport.formats); free(swapchainSupport.presentModes);
+	free(swapchainSupport.formats); free(swapchainSupport.presentModes); // FREE'D swapchainSupport
 
 	vkGetSwapchainImagesKHR(dev, swapchain, &n_image, NULL);
 	swapchain_images = malloc(sizeof(VkImage)*n_image); // MALLOC'D swapchain_images
@@ -343,10 +342,8 @@ void createSwapchain() {
 //     or some simple insidious mispelling?
 // Remember to uncomment the for loop to Destroy ALL imageViews when you do figure this out.
 void createImageViews() {
-	uint32_t n_image = vkGetSwapchainImagesKHR(dev, swapchain, &n_image, NULL);
-	// ^ I should just make n_image a global at this point
 	swapchain_image_views = malloc(sizeof(VkImageView) * n_image); // MALLOC'D swapchain_image_views
-	for(size_t i=0; i < n_image; i++) {
+	for(uint32_t i=0; i < n_image; i++) {
 		VkImageViewCreateInfo create_info = (VkImageViewCreateInfo){
 			.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
 			.image = swapchain_images[i],
@@ -364,7 +361,7 @@ void createImageViews() {
 			.flags = 0,
 			.pNext = NULL
 		};
-		if(vkCreateImageView(dev, &create_info, NULL, &swapchain_image_views[i]) != VK_SUCCESS) printf("Swapchain image view (index %lu) creation failed! :(",i);
+		if(vkCreateImageView(dev, &create_info, NULL, &swapchain_image_views[i]) != VK_SUCCESS) printf("Swapchain image view (index %u) creation failed! :(",i);
 	}
 }
 
@@ -606,6 +603,26 @@ void createGraphicsPipeline() {
 }
 
 
+void createFrameBuffers() {
+	swapchain_framebuffers = malloc(sizeof(VkFramebuffer) * n_image);
+	
+	for(size_t i=0; i<n_image; i++) {
+		VkImageView attachments[] = {swapchain_image_views[i]};
+		
+		VkFramebufferCreateInfo framebuffer_create_info = (VkFramebufferCreateInfo){
+			.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+			.renderPass = render_pass,
+			.attachmentCount = 1,
+			.pAttachments = attachments,
+			.width = swapchain_extent.width,
+			.height = swapchain_extent.height,
+			.layers = 1
+		};
+		if(vkCreateFramebuffer(dev, &framebuffer_create_info, NULL, &swapchain_framebuffers[i]) != VK_SUCCESS) printf("Failed to create framebuffer! :(");
+	}
+}
+
+
 void initVulkan() {
 	createInstance();
 	createSurface();
@@ -615,6 +632,7 @@ void initVulkan() {
 	createImageViews();
 	createRenderPass();
 	createGraphicsPipeline();
+	createFrameBuffers();
 }
 
 void mainLoop() {
@@ -624,14 +642,17 @@ void mainLoop() {
 }
 
 void cleanup() {
+	for(uint32_t i=0; i<n_image; i++) {
+		vkDestroyFramebuffer(dev,swapchain_framebuffers[i],NULL);
+	}
+
 	vkDestroyPipeline(dev,graphics_pipeline,NULL);
 	vkDestroyPipelineLayout(dev,pipeline_layout,NULL);
 	vkDestroyRenderPass(dev,render_pass,NULL);
 
 	//TODO ImageViews invalid accorind to validation layers when getting destroyed apparently? idk.
-	uint32_t n_image; // Yep should probably just be a global
 	vkGetSwapchainImagesKHR(dev, swapchain, &n_image, NULL);
-//	/*for(uint32_t i=0; i<n_image; i++)*/ vkDestroyImageView(dev,swapchain_image_views[0],NULL);
+	for(uint32_t i=0; i<n_image; i++) vkDestroyImageView(dev,swapchain_image_views[i],NULL);
 	free(swapchain_image_views); swapchain_image_views = VK_NULL_HANDLE;
 
 	vkDestroySwapchainKHR(dev,swapchain,NULL);
