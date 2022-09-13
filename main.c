@@ -42,6 +42,7 @@ VkImage* swapchain_images;
 VkFormat swapchain_image_format;
 VkExtent2D swapchain_extent;
 VkImageView* swapchain_image_views;
+VkPipelineLayout pipeline_layout;
 
 
 GLFWwindow* initWindow() {
@@ -400,6 +401,17 @@ VkShaderModule createShaderModule(const char* shdr_code, unsigned long code_sz) 
 	return shdr_module;
 }
 
+
+VkDynamicState dynamic_states[] = {
+	VK_DYNAMIC_STATE_VIEWPORT,
+	VK_DYNAMIC_STATE_SCISSOR
+};
+VkPipelineDynamicStateCreateInfo dynamic_state_create_info = (VkPipelineDynamicStateCreateInfo){
+	.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+	.dynamicStateCount = 2, // see dynamic_states above
+	.pDynamicStates = dynamic_states
+};
+
 void createGraphicsPipeline() {
 	unsigned long vert_shdr_sz, frag_shdr_sz;
 	char* vert_shdr_code = readFile("shaders/vert.spv",&vert_shdr_sz);
@@ -425,9 +437,111 @@ void createGraphicsPipeline() {
 
 	VkPipelineShaderStageCreateInfo shdr_stages[] = {vert_shdr_stage_info, frag_shdr_stage_info};
 
+
+	VkPipelineVertexInputStateCreateInfo vertex_input_create_info = (VkPipelineVertexInputStateCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+		.vertexBindingDescriptionCount = 0,
+		.pVertexBindingDescriptions = NULL,
+		.vertexAttributeDescriptionCount =0,
+		.pVertexAttributeDescriptions = NULL
+	};
+	VkPipelineInputAssemblyStateCreateInfo input_asm_create_info = (VkPipelineInputAssemblyStateCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+		.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, // plenty of ways to optimize vertices w/ different options here
+		.primitiveRestartEnable = VK_FALSE
+	};
+	VkViewport viewport = (VkViewport){
+		.x=0.f,
+		.y=0.f,
+    .width=(float)swapchain_extent.width,
+		.height=(float)swapchain_extent.height,
+		.minDepth = 0.f,
+		.maxDepth = 1.f
+	};
+	VkRect2D scissor = (VkRect2D){
+		.offset = {0,0},
+		.extent = swapchain_extent
+	};
+	VkPipelineViewportStateCreateInfo viewport_state_create_info = (VkPipelineViewportStateCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+		.viewportCount = 1,
+		//.pViewports = &viewport, // To set up the viewport in the pipeline (not dynamic). To change this then, you'd need to make a new pipeline
+		.scissorCount = 1,
+		//.pScissors = &scissor // ^ see comment above
+	};
+	VkPipelineRasterizationStateCreateInfo rasterizer = (VkPipelineRasterizationStateCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+		.depthClampEnable = VK_FALSE, // frags beyond near/far planes clamped to them instead of discarding. Useful for shadowmaps. Use reqs enabling GPU feature.
+		.rasterizerDiscardEnable = VK_FALSE,
+		.polygonMode = VK_POLYGON_MODE_FILL,
+		.lineWidth = 1.f, // thicker widths maybe not available on some hardware, reqs "wideLines" GPU feature.
+		.cullMode = VK_CULL_MODE_BACK_BIT,
+		.frontFace = VK_FRONT_FACE_CLOCKWISE,
+		.depthBiasEnable = VK_FALSE,
+		.depthBiasConstantFactor = 0.f,
+		.depthBiasClamp = 0.f,
+		.depthBiasSlopeFactor = 0.f
+	};
+	VkPipelineMultisampleStateCreateInfo multisampling = (VkPipelineMultisampleStateCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+		.sampleShadingEnable = VK_FALSE,
+		.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+		.minSampleShading = 1.f,
+		.pSampleMask = NULL,
+		.alphaToCoverageEnable = VK_FALSE,
+		.alphaToOneEnable = VK_FALSE
+	};
+
+	// See tut for intuition about how this configures color blending
+	// The config below (basically .blendEnable = VK_FALSE disables e/t) would mean the new color completely overwrites the old.
+	// NOTE: this struct is per-framebuffer
+	VkPipelineColorBlendAttachmentState color_blend_attachment = (VkPipelineColorBlendAttachmentState){
+		.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+		.blendEnable = VK_FALSE, // None of the stuff below matters since we set this false
+		.srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+		.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO,
+		.colorBlendOp = VK_BLEND_OP_ADD,
+		.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+		.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+		.alphaBlendOp = VK_BLEND_OP_ADD
+	};
+	// The config below implements alpha belnding
+	  // i.e. final.rgb = new.a * new.rgb + (1-new.a) * old.rgb; final.a = new.a 
+	//VkPipelineColorBlendAttachmentState color_blend_attachment = (VkPipelineColorBlendAttachmentState){
+	//	.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+	//	.blendEnable = VK_TRUE,
+	//	.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+	//	.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+	//	.colorBlendOp = VK_BLEND_OP_ADD,
+	//	.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+	//	.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+	//	.alphaBlendOp = VK_BLEND_OP_ADD
+	//};
+	
+	VkPipelineColorBlendStateCreateInfo color_blending = (VkPipelineColorBlendStateCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+		.logicOpEnable = VK_FALSE, // If you finna use bitwise combination blending instead, enable this. NOTE: enabling this overwites blendEnable to VK_FALSE! Can't use both.
+		.logicOp = VK_LOGIC_OP_COPY, // ^
+		.attachmentCount = 1,
+		.pAttachments = &color_blend_attachment,
+		.blendConstants[0] = 0.f,
+		.blendConstants[1] = 0.f,
+		.blendConstants[2] = 0.f,
+		.blendConstants[3] = 0.f,
+	};
+
+	VkPipelineLayoutCreateInfo pipeline_layout_create_info = (VkPipelineLayoutCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+		.setLayoutCount = 0,
+		.pSetLayouts = NULL,
+		.pushConstantRangeCount = 0,
+		.pPushConstantRanges = NULL
+	};
+	if(vkCreatePipelineLayout(dev, &pipeline_layout_create_info, NULL, &pipeline_layout) != VK_SUCCESS) printf("Failed to create pipeline layout! :(");
+
 	vkDestroyShaderModule(dev,vert_shdr_module,NULL);
 	vkDestroyShaderModule(dev,frag_shdr_module,NULL);
-
+	free(vert_shdr_code); free(frag_shdr_code);
 }
 
 
@@ -448,6 +562,8 @@ void mainLoop() {
 }
 
 void cleanup() {
+	vkDestroyPipelineLayout(dev,pipeline_layout,NULL);
+
 	//TODO ImageViews invalid accorind to validation layers when getting destroyed apparently? idk.
 	uint32_t n_image; // Yep should probably just be a global
 	vkGetSwapchainImagesKHR(dev, swapchain, &n_image, NULL);
