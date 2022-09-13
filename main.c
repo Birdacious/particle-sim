@@ -42,6 +42,7 @@ VkImage* swapchain_images;
 VkFormat swapchain_image_format;
 VkExtent2D swapchain_extent;
 VkImageView* swapchain_image_views;
+VkRenderPass render_pass;
 VkPipelineLayout pipeline_layout;
 
 
@@ -544,6 +545,39 @@ void createGraphicsPipeline() {
 	free(vert_shdr_code); free(frag_shdr_code);
 }
 
+void createRenderPass() {
+	// We just have a single color buffer attachment represented by one of the images from the swap chain
+	VkAttachmentDescription color_attachment = (VkAttachmentDescription){
+		.format = swapchain_image_format,
+		.samples = VK_SAMPLE_COUNT_1_BIT,
+		.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, // What to do with the data in the attachment before rendering
+		.storeOp = VK_ATTACHMENT_STORE_OP_STORE, // ^ but ~after~ rendering
+		// NOTE: see tut for more Op options
+		.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE, // We're not using the stencil buffer
+		.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+		.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+		.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+	};
+	VkAttachmentReference color_attachment_ref = (VkAttachmentReference){
+		.attachment = 0, // INDEX of attachment to reference (index in the attachment descriptions array)
+		.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+	};
+	VkSubpassDescription subpass = (VkSubpassDescription){
+		.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+		.colorAttachmentCount = 1,
+		.pColorAttachments = &color_attachment_ref // index of the attachment in this array is directly reference from the frag shdr w/ "layout(location=0) out vec4 outColor"!
+		// NOTE: See tut for the other types of attachments that can be referenced by a subpass.
+	};
+	
+	VkRenderPassCreateInfo render_pass_create_info = (VkRenderPassCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+		.attachmentCount = 1,
+		.pAttachments = &color_attachment,
+		.subpassCount = 1,
+		.pSubpasses = &subpass
+	};
+	if(vkCreateRenderPass(dev, &render_pass_create_info, NULL, &render_pass) != VK_SUCCESS) printf("Failed to create render pass! :(");
+}
 
 void initVulkan() {
 	createInstance();
@@ -552,6 +586,7 @@ void initVulkan() {
 	createLogicalDevice();
 	createSwapchain();
 	createImageViews();
+	createRenderPass();
 	createGraphicsPipeline();
 }
 
@@ -563,6 +598,7 @@ void mainLoop() {
 
 void cleanup() {
 	vkDestroyPipelineLayout(dev,pipeline_layout,NULL);
+	vkDestroyRenderPass(dev,render_pass,NULL);
 
 	//TODO ImageViews invalid accorind to validation layers when getting destroyed apparently? idk.
 	uint32_t n_image; // Yep should probably just be a global
