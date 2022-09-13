@@ -48,6 +48,8 @@ VkPipeline graphics_pipeline;
 VkFramebuffer* swapchain_framebuffers;
 VkCommandPool command_pool;
 VkCommandBuffer command_buffer;
+VkSemaphore image_available_semaphore, render_finished_semaphore;
+VkFence in_flight_fence;
 
 
 GLFWwindow* initWindow() {
@@ -426,13 +428,23 @@ void createRenderPass() {
 		.pColorAttachments = &color_attachment_ref // index of the attachment in this array is directly reference from the frag shdr w/ "layout(location=0) out vec4 outColor"!
 		// NOTE: See tut for the other types of attachments that can be referenced by a subpass.
 	};
+	VkSubpassDependency dependency = (VkSubpassDependency){
+		.srcSubpass = VK_SUBPASS_EXTERNAL, //refers to implicit subpass before the render pass (or after, if in dst below v)
+		.dstSubpass = 0, // refers to the index of our first and only subpass
+		.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, // operations to wait on and stages in which the ops occur. So here we wait for color attachment output stage, so swapchain finishes reading image before we access it
+		.srcAccessMask = 0,
+		.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+		.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+	};
 	
 	VkRenderPassCreateInfo render_pass_create_info = (VkRenderPassCreateInfo){
 		.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
 		.attachmentCount = 1,
 		.pAttachments = &color_attachment,
 		.subpassCount = 1,
-		.pSubpasses = &subpass
+		.pSubpasses = &subpass,
+		.dependencyCount = 1,
+		.pDependencies = &dependency
 	};
 	if(vkCreateRenderPass(dev, &render_pass_create_info, NULL, &render_pass) != VK_SUCCESS) printf("Failed to create render pass! :(");
 }
@@ -685,6 +697,57 @@ void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
 	if(vkEndCommandBuffer(command_buffer) != VK_SUCCESS) printf("Failed to record command buffer! :(");
 }
 
+void createSyncObjects() {
+	VkSemaphoreCreateInfo semaphore_info = (VkSemaphoreCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO
+	};
+	VkFenceCreateInfo fence_info = (VkFenceCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+		.flags = VK_FENCE_CREATE_SIGNALED_BIT // So that the fence is already signalled on start and we don't get stuck waiting on the first frame before it gets a chance to be vkResetFences()'d
+	};
+	if(vkCreateSemaphore(dev, &semaphore_info, NULL, &image_available_semaphore) != VK_SUCCESS ||
+		 vkCreateSemaphore(dev, &semaphore_info, NULL, &render_finished_semaphore) != VK_SUCCESS ||
+		 vkCreateFence(    dev, &fence_info,     NULL, &in_flight_fence)           != VK_SUCCESS   ) {
+		printf("Failed to create sync objects! :(");
+	}
+}
+
+void drawFrame() {
+	vkWaitForFences(dev, 1, &in_flight_fence, VK_TRUE, UINT64_MAX);
+	vkResetFences(dev, 1, &in_flight_fence);
+
+	uint32_t image_index;
+	vkAcquireNextImageKHR(dev, swapchain, UINT64_MAX, image_available_semaphore, VK_NULL_HANDLE, &image_index);
+	recordCommandBuffer(command_buffer, image_index);
+
+	VkSemaphore wait_semaphores[] = {image_available_semaphore};
+	VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+	VkSemaphore signal_semaphores[] = {render_finished_semaphore};
+	VkSubmitInfo submit_info = (VkSubmitInfo){
+		.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+		.waitSemaphoreCount = 1,
+		.pWaitSemaphores = wait_semaphores,
+		.pWaitDstStageMask = wait_stages,
+		.commandBufferCount = 1,
+		.pCommandBuffers = &command_buffer,
+		.signalSemaphoreCount = 1,
+		.pSignalSemaphores = signal_semaphores
+	};
+	if(vkQueueSubmit(graphics_queue, 1, &submit_info, in_flight_fence) != VK_SUCCESS) printf("Failed to submit draw command buffer! :(");
+
+	VkSwapchainKHR swapchains[] = {swapchain};
+	VkPresentInfoKHR present_info = (VkPresentInfoKHR){
+		.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+		.waitSemaphoreCount = 1,
+		.pWaitSemaphores = signal_semaphores, // which semaphores to wait on before presentation can happen
+		.swapchainCount = 1,
+		.pSwapchains = swapchains,
+		.pImageIndices = &image_index,
+		.pResults = NULL
+	};
+	vkQueuePresentKHR(present_queue, &present_info);
+}
+
 void initVulkan() {
 	createInstance();
 	createSurface();
@@ -697,15 +760,21 @@ void initVulkan() {
 	createFrameBuffers();
 	createCommandPool();
 	createCommandBuffer();
+	createSyncObjects();
 }
 
 void mainLoop() {
 	while(!glfwWindowShouldClose(window)) {
 		glfwPollEvents();
+		drawFrame();
 	}
+	vkDeviceWaitIdle(dev);
 }
 
 void cleanup() {
+	vkDestroySemaphore(dev,image_available_semaphore,NULL);
+	vkDestroySemaphore(dev,render_finished_semaphore,NULL);
+	vkDestroyFence(dev,in_flight_fence,NULL);
 	vkDestroyCommandPool(dev,command_pool,NULL);
 	for(uint32_t i=0; i<n_image; i++) {
 		vkDestroyFramebuffer(dev,swapchain_framebuffers[i],NULL);
