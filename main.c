@@ -51,13 +51,21 @@ VkCommandPool command_pool;
 VkCommandBuffer *command_buffers;
 VkSemaphore *image_available_semaphores, *render_finished_semaphores;
 VkFence *in_flight_fences;
+bool framebuffer_resized = false;
 
 
-GLFWwindow* initWindow() {
+// does this actually need to be a static fn?
+void framebufferResizeCallback(GLFWwindow *window, int w, int h) {
+	framebuffer_resized = true;
+}
+void initWindow() {
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-	glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-	return glfwCreateWindow(WIDTH,HEIGHT,"Vulkan", NULL,NULL);
+	//glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+	window = glfwCreateWindow(WIDTH,HEIGHT,"Vulkan", NULL,NULL);
+	// don't need glfwSetWindowUserPointer(window,this) b/c bool framebuffer_resized is already in this file and globally accessible.
+	    // The use of this function is so that you can access some things you might need from fn callbacks, w/o having to make those things totally global.
+	glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
 }
 
 void createInstance() {
@@ -714,12 +722,47 @@ void createSyncObjects() {
 	}
 }
 
+
+void cleanupSwapchain() {
+	for(uint32_t i=0; i<n_image; i++) {
+		vkDestroyFramebuffer(dev,swapchain_framebuffers[i],NULL);
+	}
+
+	//vkGetSwapchainImagesKHR(dev, swapchain, &n_image, NULL);
+	for(uint32_t i=0; i<n_image; i++) {
+		vkDestroyImageView(dev,swapchain_image_views[i],NULL);
+	}
+
+	vkDestroySwapchainKHR(dev,swapchain,NULL);
+}
+
+void recreateSwapchain() {
+	int w=0; int h=0;
+	glfwGetFramebufferSize(window, &w,&h);
+	while(w==0||h==0) {
+		glfwGetFramebufferSize(window, &w,&h);
+		glfwWaitEvents();
+	}
+
+	vkDeviceWaitIdle(dev);
+	cleanupSwapchain();
+
+	createSwapchain();
+	createImageViews();
+	createFramebuffers();
+	// Could recreate renderpass too. Swapchain image format could change during prog's life, e.g. maybe useful if dragging a window to another monitor.
+}
+
+
 void drawFrame() {
 	vkWaitForFences(dev, 1, &in_flight_fences[current_frame], VK_TRUE, UINT64_MAX);
-	vkResetFences(dev, 1, &in_flight_fences[current_frame]);
 
 	uint32_t image_index;
-	vkAcquireNextImageKHR(dev, swapchain, UINT64_MAX, image_available_semaphores[current_frame], VK_NULL_HANDLE, &image_index);
+	VkResult result = vkAcquireNextImageKHR(dev, swapchain, UINT64_MAX, image_available_semaphores[current_frame], VK_NULL_HANDLE, &image_index);
+	if(result == VK_ERROR_OUT_OF_DATE_KHR) {
+		recreateSwapchain(); return;
+	} else if (result != VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) { printf("Failed to acquire swap chain image!"); }
+	vkResetFences(dev, 1, &in_flight_fences[current_frame]);
 	vkResetCommandBuffer(command_buffers[current_frame],0);
 	recordCommandBuffer(command_buffers[current_frame],image_index);
 
@@ -748,23 +791,14 @@ void drawFrame() {
 		.pImageIndices = &image_index,
 		.pResults = NULL
 	};
-	vkQueuePresentKHR(present_queue, &present_info);
+	result = vkQueuePresentKHR(present_queue, &present_info);
+	if(result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebuffer_resized) {
+		framebuffer_resized = false;
+		recreateSwapchain();
+	} else if (result != VK_SUCCESS) { printf("Failed to present swap chain image!"); }
+	// TODO later: resizing window quickly causes validation layers message about imageExtent = (,) slightly out of bounds of min/maxImageExtent = (,). See comment in "Swap Chain Recreation" section for possible fixes, it's quite far down. The GTX1660 guy's solution doesn't work for me, prolly need to do s/t on glfw side like just wait while user is resizing window, as Alexander suggests.
 
 	current_frame = (current_frame+1) % MAX_FRAMES_IN_FLIGHT;
-}
-
-
-void cleanupSwapChain() {
-	
-}
-
-void recreateSwapchain() {
-	vkDeviceWaitIdle(dev);
-	cleanupSwapChain();
-
-	createSwapchain();
-	createImageViews();
-	createFramebuffers();
 }
 
 
@@ -792,25 +826,21 @@ void mainLoop() {
 }
 
 void cleanup() {
+	cleanupSwapchain();
+
 	for(uint32_t i=0; i<MAX_FRAMES_IN_FLIGHT; i++) {
 		vkDestroySemaphore(dev,image_available_semaphores[i],NULL);
 		vkDestroySemaphore(dev,render_finished_semaphores[i],NULL);
 		vkDestroyFence(dev,in_flight_fences[i],NULL);
 	}
 	vkDestroyCommandPool(dev,command_pool,NULL);
-	for(uint32_t i=0; i<n_image; i++) {
-		vkDestroyFramebuffer(dev,swapchain_framebuffers[i],NULL);
-	}
 
 	vkDestroyPipeline(dev,graphics_pipeline,NULL);
 	vkDestroyPipelineLayout(dev,pipeline_layout,NULL);
 	vkDestroyRenderPass(dev,render_pass,NULL);
 
-	vkGetSwapchainImagesKHR(dev, swapchain, &n_image, NULL);
-	for(uint32_t i=0; i<n_image; i++) vkDestroyImageView(dev,swapchain_image_views[i],NULL);
 	free(swapchain_image_views); swapchain_image_views = VK_NULL_HANDLE;
 
-	vkDestroySwapchainKHR(dev,swapchain,NULL);
 	vkDestroyDevice(dev,NULL);
 	vkDestroySurfaceKHR(instance,surface,NULL);
 	vkDestroyInstance(instance,NULL);
@@ -819,7 +849,7 @@ void cleanup() {
 }
 
 void run() {
-	window = initWindow();
+	initWindow();
 	initVulkan();
 	mainLoop(window);
 	cleanup(window);
