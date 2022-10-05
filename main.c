@@ -30,7 +30,8 @@ bool checkValidationLayerSupport() {
 
 const uint32_t WIDTH  = 800;
 const uint32_t HEIGHT = 600;
-GLFWwindow* window;
+const uint32_t MAX_FRAMES_IN_FLIGHT = 2; uint32_t current_frame = 0;
+GLFWwindow *window;
 VkInstance instance;
 VkPhysicalDevice physical_dev = VK_NULL_HANDLE;
 VkDevice dev;
@@ -38,18 +39,18 @@ VkQueue graphics_queue;
 VkQueue present_queue;
 VkSurfaceKHR surface;
 VkSwapchainKHR swapchain;
-VkImage* swapchain_images; uint32_t n_image;
+VkImage *swapchain_images; uint32_t n_image;
 VkFormat swapchain_image_format;
 VkExtent2D swapchain_extent;
-VkImageView* swapchain_image_views;
+VkImageView *swapchain_image_views;
 VkRenderPass render_pass;
 VkPipelineLayout pipeline_layout;
 VkPipeline graphics_pipeline;
-VkFramebuffer* swapchain_framebuffers;
+VkFramebuffer *swapchain_framebuffers;
 VkCommandPool command_pool;
-VkCommandBuffer command_buffer;
-VkSemaphore image_available_semaphore, render_finished_semaphore;
-VkFence in_flight_fence;
+VkCommandBuffer *command_buffers;
+VkSemaphore *image_available_semaphores, *render_finished_semaphores;
+VkFence *in_flight_fences;
 
 
 GLFWwindow* initWindow() {
@@ -336,15 +337,6 @@ void createSwapchain() {
 	swapchain_extent = extent;
 }
 
-// NOTE NOTE NOTE NOTE Destroy is giving validation layers error that the VkImageView handle is not valid.
-// I tried only destroying swapchain_image_views[0], and it also has an error, so ALL the VkImageViews in the array are bad I guess.
-// I tried messing with the VkImageViewCreateInfo and messing it up, and it still only complains on Destroy. So there could be s/t wrong when creating.
-//   I.e. there is no check if the create_info is valid yet, it seems.
-//   So there could be s/t wrong in the create info but it's hard to know.
-//     I don't think swapchain_image_format is getting out of scope.
-//     My guess is s/t in the swapchain_images[] is wrong?
-//     or some simple insidious mispelling?
-// Remember to uncomment the for loop to Destroy ALL imageViews when you do figure this out.
 void createImageViews() {
 	swapchain_image_views = malloc(sizeof(VkImageView) * n_image); // MALLOC'D swapchain_image_views
 	for(uint32_t i=0; i < n_image; i++) {
@@ -617,7 +609,7 @@ void createGraphicsPipeline() {
 }
 
 
-void createFrameBuffers() {
+void createFramebuffers() {
 	swapchain_framebuffers = malloc(sizeof(VkFramebuffer) * n_image);
 	
 	for(size_t i=0; i<n_image; i++) {
@@ -646,14 +638,16 @@ void createCommandPool() {
 	if(vkCreateCommandPool(dev, &pool_info, NULL, &command_pool) != VK_SUCCESS) printf("Failed to create command pool! :(");
 }
 
-void createCommandBuffer() {
+void createCommandBuffers() {
+	command_buffers = malloc(sizeof(VkCommandBuffer) * MAX_FRAMES_IN_FLIGHT);
+
 	VkCommandBufferAllocateInfo alloc_info = (VkCommandBufferAllocateInfo){
 		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
 		.commandPool = command_pool,
 		.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, // Specifies if primary or secondary command buffer. Secondary cannot be submitted to queue directly, but can be called from primary cmd buffers.
-		.commandBufferCount = 1
+		.commandBufferCount = MAX_FRAMES_IN_FLIGHT
 	};
-	if(vkAllocateCommandBuffers(dev, &alloc_info, &command_buffer) != VK_SUCCESS) printf("Failed to allocate command buffers! :(");
+	if(vkAllocateCommandBuffers(dev, &alloc_info, command_buffers) != VK_SUCCESS) printf("Failed to allocate command buffers! :(");
 }
 
 void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
@@ -675,8 +669,8 @@ void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
 		.pClearValues = &clear_color // defines the clear values to use for VK_ATTACHMENT_LOAD_OP_CLEAR
 	};
 
-	vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
-	vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipeline); // Could specify a compute pipeline insead of graphics...
+	vkCmdBeginRenderPass(command_buffers[current_frame], &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
+	vkCmdBindPipeline(command_buffers[current_frame], VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipeline); // Could specify a compute pipeline insead of graphics...
 	// We specified viewport and scissor to be dynamic so we set them here.
 	VkViewport viewport = (VkViewport){
 		.x=0.f,
@@ -686,18 +680,22 @@ void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
 		.minDepth = 0.f,
 		.maxDepth = 1.f
 	};
-	vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+	vkCmdSetViewport(command_buffers[current_frame], 0, 1, &viewport);
 	VkRect2D scissor = (VkRect2D){
 		.offset = {0,0},
 		.extent = swapchain_extent
 	};
-	vkCmdSetScissor(command_buffer, 0, 1, &scissor);
-	vkCmdDraw(command_buffer, 3, 1, 0, 0); // args: cb, vertexCount, instanceCount, firstVertex (lowest val of gl_VertexIndex), firstInstance
-	vkCmdEndRenderPass(command_buffer);
-	if(vkEndCommandBuffer(command_buffer) != VK_SUCCESS) printf("Failed to record command buffer! :(");
+	vkCmdSetScissor(command_buffers[current_frame], 0, 1, &scissor);
+	vkCmdDraw(command_buffers[current_frame], 3, 1, 0, 0); // args: cb, vertexCount, instanceCount, firstVertex (lowest val of gl_VertexIndex), firstInstance
+	vkCmdEndRenderPass(command_buffers[current_frame]);
+	if(vkEndCommandBuffer(command_buffers[current_frame]) != VK_SUCCESS) printf("Failed to record command buffer! :(");
 }
 
 void createSyncObjects() {
+	image_available_semaphores = malloc(sizeof(VkSemaphore) * MAX_FRAMES_IN_FLIGHT);
+	render_finished_semaphores = malloc(sizeof(VkSemaphore) * MAX_FRAMES_IN_FLIGHT);
+	in_flight_fences = malloc(sizeof(VkFence) * MAX_FRAMES_IN_FLIGHT);
+	
 	VkSemaphoreCreateInfo semaphore_info = (VkSemaphoreCreateInfo){
 		.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO
 	};
@@ -705,35 +703,40 @@ void createSyncObjects() {
 		.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
 		.flags = VK_FENCE_CREATE_SIGNALED_BIT // So that the fence is already signalled on start and we don't get stuck waiting on the first frame before it gets a chance to be vkResetFences()'d
 	};
-	if(vkCreateSemaphore(dev, &semaphore_info, NULL, &image_available_semaphore) != VK_SUCCESS ||
-		 vkCreateSemaphore(dev, &semaphore_info, NULL, &render_finished_semaphore) != VK_SUCCESS ||
-		 vkCreateFence(    dev, &fence_info,     NULL, &in_flight_fence)           != VK_SUCCESS   ) {
-		printf("Failed to create sync objects! :(");
+
+	for(uint32_t i=0; i<MAX_FRAMES_IN_FLIGHT; i++) {
+		if(vkCreateSemaphore(dev, &semaphore_info, NULL, &image_available_semaphores[i]) != VK_SUCCESS ||
+			 vkCreateSemaphore(dev, &semaphore_info, NULL, &render_finished_semaphores[i]) != VK_SUCCESS ||
+		 	 vkCreateFence(    dev, &fence_info,     NULL, &in_flight_fences[i])         != VK_SUCCESS   ) {
+
+			printf("Failed to create sync objects for a frame! :(");
+		}
 	}
 }
 
 void drawFrame() {
-	vkWaitForFences(dev, 1, &in_flight_fence, VK_TRUE, UINT64_MAX);
-	vkResetFences(dev, 1, &in_flight_fence);
+	vkWaitForFences(dev, 1, &in_flight_fences[current_frame], VK_TRUE, UINT64_MAX);
+	vkResetFences(dev, 1, &in_flight_fences[current_frame]);
 
 	uint32_t image_index;
-	vkAcquireNextImageKHR(dev, swapchain, UINT64_MAX, image_available_semaphore, VK_NULL_HANDLE, &image_index);
-	recordCommandBuffer(command_buffer, image_index);
+	vkAcquireNextImageKHR(dev, swapchain, UINT64_MAX, image_available_semaphores[current_frame], VK_NULL_HANDLE, &image_index);
+	vkResetCommandBuffer(command_buffers[current_frame],0);
+	recordCommandBuffer(command_buffers[current_frame],image_index);
 
-	VkSemaphore wait_semaphores[] = {image_available_semaphore};
+	VkSemaphore wait_semaphores[] = {image_available_semaphores[current_frame]};
 	VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-	VkSemaphore signal_semaphores[] = {render_finished_semaphore};
+	VkSemaphore signal_semaphores[] = {render_finished_semaphores[current_frame]};
 	VkSubmitInfo submit_info = (VkSubmitInfo){
 		.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
 		.waitSemaphoreCount = 1,
 		.pWaitSemaphores = wait_semaphores,
 		.pWaitDstStageMask = wait_stages,
 		.commandBufferCount = 1,
-		.pCommandBuffers = &command_buffer,
+		.pCommandBuffers = &command_buffers[current_frame],
 		.signalSemaphoreCount = 1,
 		.pSignalSemaphores = signal_semaphores
 	};
-	if(vkQueueSubmit(graphics_queue, 1, &submit_info, in_flight_fence) != VK_SUCCESS) printf("Failed to submit draw command buffer! :(");
+	if(vkQueueSubmit(graphics_queue, 1, &submit_info, in_flight_fences[current_frame]) != VK_SUCCESS) printf("Failed to submit draw command buffer! :(");
 
 	VkSwapchainKHR swapchains[] = {swapchain};
 	VkPresentInfoKHR present_info = (VkPresentInfoKHR){
@@ -746,7 +749,24 @@ void drawFrame() {
 		.pResults = NULL
 	};
 	vkQueuePresentKHR(present_queue, &present_info);
+
+	current_frame = (current_frame+1) % MAX_FRAMES_IN_FLIGHT;
 }
+
+
+void cleanupSwapChain() {
+	
+}
+
+void recreateSwapchain() {
+	vkDeviceWaitIdle(dev);
+	cleanupSwapChain();
+
+	createSwapchain();
+	createImageViews();
+	createFramebuffers();
+}
+
 
 void initVulkan() {
 	createInstance();
@@ -757,9 +777,9 @@ void initVulkan() {
 	createImageViews();
 	createRenderPass();
 	createGraphicsPipeline();
-	createFrameBuffers();
+	createFramebuffers();
 	createCommandPool();
-	createCommandBuffer();
+	createCommandBuffers();
 	createSyncObjects();
 }
 
@@ -772,9 +792,11 @@ void mainLoop() {
 }
 
 void cleanup() {
-	vkDestroySemaphore(dev,image_available_semaphore,NULL);
-	vkDestroySemaphore(dev,render_finished_semaphore,NULL);
-	vkDestroyFence(dev,in_flight_fence,NULL);
+	for(uint32_t i=0; i<MAX_FRAMES_IN_FLIGHT; i++) {
+		vkDestroySemaphore(dev,image_available_semaphores[i],NULL);
+		vkDestroySemaphore(dev,render_finished_semaphores[i],NULL);
+		vkDestroyFence(dev,in_flight_fences[i],NULL);
+	}
 	vkDestroyCommandPool(dev,command_pool,NULL);
 	for(uint32_t i=0; i<n_image; i++) {
 		vkDestroyFramebuffer(dev,swapchain_framebuffers[i],NULL);
@@ -784,7 +806,6 @@ void cleanup() {
 	vkDestroyPipelineLayout(dev,pipeline_layout,NULL);
 	vkDestroyRenderPass(dev,render_pass,NULL);
 
-	//TODO ImageViews invalid accorind to validation layers when getting destroyed apparently? idk.
 	vkGetSwapchainImagesKHR(dev, swapchain, &n_image, NULL);
 	for(uint32_t i=0; i<n_image; i++) vkDestroyImageView(dev,swapchain_image_views[i],NULL);
 	free(swapchain_image_views); swapchain_image_views = VK_NULL_HANDLE;
