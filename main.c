@@ -1,5 +1,6 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#include <cglm/cglm.h>
 #include <stdio.h>
 #include <error.h>
 #include <stdlib.h>
@@ -52,6 +53,40 @@ VkCommandBuffer *command_buffers;
 VkSemaphore *image_available_semaphores, *render_finished_semaphores;
 VkFence *in_flight_fences;
 bool framebuffer_resized = false;
+
+typedef struct { vec2 pos; vec3 color; } Vertex;
+const Vertex vertices[3] = {
+	{{ .0f,-.5f}, {1.f,0.f,0.f}},
+	{{ .0f,-.5f}, {0.f,1.f,0.f}},
+	{{-.5f, .5f}, {0.f,0.f,1.f}}
+};
+
+VkVertexInputBindingDescription *getBindingDescription() {
+	VkVertexInputBindingDescription *binding_desc = malloc(sizeof(VkVertexInputBindingDescription));
+	*binding_desc = (VkVertexInputBindingDescription){
+		.binding = 0,
+		.stride = sizeof(Vertex), // bytes from one entry to next
+		.inputRate = VK_VERTEX_INPUT_RATE_VERTEX, // or ..._INSTANCE, for instanced rendering
+	};
+	return binding_desc;
+}
+const int n_attr_descs = 2;
+VkVertexInputAttributeDescription *getAttributeDescriptions() {
+	VkVertexInputAttributeDescription *attr_descs = malloc(n_attr_descs*sizeof(VkVertexInputAttributeDescription));
+	attr_descs[0] = (VkVertexInputAttributeDescription){
+		.binding = 0,
+		.location = 0,
+		.format = VK_FORMAT_R32G32_SFLOAT, // uses color format names. This really means vec2. Others: R32/R32G32/R32G32B32/R32G32B32A32 basically mean float/vec2/vec3/vec4. And _SINT/_UINT/_SFLOAT == ivec#/uvec#/dvec# (the _SFLOAT one is 64 bit unlike the others, takes up 2 "slots" per vec item).
+		.offset = offsetof(Vertex,pos)
+	};
+	attr_descs[1] = (VkVertexInputAttributeDescription){
+		.binding = 0,
+		.location = 1,
+		.format = VK_FORMAT_R32G32B32_SFLOAT,
+		.offset = offsetof(Vertex,color)
+	};
+	return attr_descs;
+}
 
 
 // does this actually need to be a static fn?
@@ -485,13 +520,14 @@ void createGraphicsPipeline() {
 
 	VkPipelineShaderStageCreateInfo shdr_stages[] = {vert_shdr_stage_info, frag_shdr_stage_info};
 
-
+	VkVertexInputBindingDescription *binding_desc = getBindingDescription();
+	VkVertexInputAttributeDescription *attr_descs = getAttributeDescriptions();
 	VkPipelineVertexInputStateCreateInfo vertex_input_create_info = (VkPipelineVertexInputStateCreateInfo){
 		.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
 		.vertexBindingDescriptionCount = 0,
-		.pVertexBindingDescriptions = NULL,
+		.pVertexBindingDescriptions = binding_desc,
 		.vertexAttributeDescriptionCount =0,
-		.pVertexAttributeDescriptions = NULL
+		.pVertexAttributeDescriptions = attr_descs
 	};
 	VkPipelineInputAssemblyStateCreateInfo input_asm_create_info = (VkPipelineInputAssemblyStateCreateInfo){
 		.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
