@@ -53,14 +53,16 @@ VkCommandBuffer *command_buffers;
 VkSemaphore *image_available_semaphores, *render_finished_semaphores;
 VkFence *in_flight_fences;
 bool framebuffer_resized = false;
+VkBuffer vertex_buffer;
+VkDeviceMemory vertex_buffer_memory;
 
 typedef struct { vec2 pos; vec3 color; } Vertex;
-const Vertex vertices[3] = {
+#define n_vertices 3
+const Vertex vertices[n_vertices] = {
 	{{ .0f,-.5f}, {1.f,0.f,0.f}},
-	{{ .0f,-.5f}, {0.f,1.f,0.f}},
-	{{-.5f, .5f}, {0.f,0.f,1.f}}
+	{{ .5f, .5f}, {0.f,1.f,0.f}},
+	{{-.5f, .5f}, {1.f,1.f,0.f}}
 };
-
 VkVertexInputBindingDescription *getBindingDescription() {
 	VkVertexInputBindingDescription *binding_desc = malloc(sizeof(VkVertexInputBindingDescription));
 	*binding_desc = (VkVertexInputBindingDescription){
@@ -524,9 +526,9 @@ void createGraphicsPipeline() {
 	VkVertexInputAttributeDescription *attr_descs = getAttributeDescriptions();
 	VkPipelineVertexInputStateCreateInfo vertex_input_create_info = (VkPipelineVertexInputStateCreateInfo){
 		.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-		.vertexBindingDescriptionCount = 0,
+		.vertexBindingDescriptionCount = 1,
 		.pVertexBindingDescriptions = binding_desc,
-		.vertexAttributeDescriptionCount =0,
+		.vertexAttributeDescriptionCount = n_attr_descs,
 		.pVertexAttributeDescriptions = attr_descs
 	};
 	VkPipelineInputAssemblyStateCreateInfo input_asm_create_info = (VkPipelineInputAssemblyStateCreateInfo){
@@ -682,6 +684,42 @@ void createCommandPool() {
 	if(vkCreateCommandPool(dev, &pool_info, NULL, &command_pool) != VK_SUCCESS) printf("Failed to create command pool! :(");
 }
 
+uint32_t findMemoryType(uint32_t type_filter, VkMemoryPropertyFlags properties) {
+	VkPhysicalDeviceMemoryProperties mem_properties; // Contains 2 arrays: memoryTypes, memoryHeaps
+	vkGetPhysicalDeviceMemoryProperties(physical_dev, &mem_properties);
+	for(uint32_t i=0; i<mem_properties.memoryTypeCount; i++) {
+		if((type_filter & (1 << i)) && (mem_properties.memoryTypes[i].propertyFlags & properties) == properties) return i;
+	}
+	printf("Failed to find suitable memory type! :("); exit(1);
+}
+void createVertexBuffer() {
+	VkBufferCreateInfo buf_info = (VkBufferCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+		.size = sizeof(vertices[0]) * n_vertices,
+		.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+		.sharingMode = VK_SHARING_MODE_EXCLUSIVE
+	};
+	if(vkCreateBuffer(dev, &buf_info, NULL, &vertex_buffer) != VK_SUCCESS) printf("Failed to create vertex buffer! :(");
+
+	VkMemoryRequirements mem_reqs; // struct containing: size, alignment, memoryTypeBits
+	vkGetBufferMemoryRequirements(dev, vertex_buffer, &mem_reqs);
+	
+	VkMemoryAllocateInfo alloc_info = (VkMemoryAllocateInfo){
+		.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+		.allocationSize = mem_reqs.size,
+		.memoryTypeIndex = findMemoryType(mem_reqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+	};
+	if(vkAllocateMemory(dev, &alloc_info, NULL, &vertex_buffer_memory) != VK_SUCCESS) printf("Failed to allocate vertex buffer memory! :(");
+
+	vkBindBufferMemory(dev, vertex_buffer, vertex_buffer_memory, 0);
+
+	void* data;
+	vkMapMemory(dev, vertex_buffer_memory, 0, buf_info.size, 0, &data);
+	// s/t s/t tutorial says s/t about flushing memory explicitly vs ..._COHERENT_BIT, idk
+	memcpy(data, vertices, (size_t)buf_info.size);
+	vkUnmapMemory(dev, vertex_buffer_memory);
+}
+
 void createCommandBuffers() {
 	command_buffers = malloc(sizeof(VkCommandBuffer) * MAX_FRAMES_IN_FLIGHT);
 
@@ -715,6 +753,11 @@ void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
 
 	vkCmdBeginRenderPass(command_buffers[current_frame], &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 	vkCmdBindPipeline(command_buffers[current_frame], VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipeline); // Could specify a compute pipeline insead of graphics...
+
+	VkBuffer vertex_buffers[] = {vertex_buffer};
+	VkDeviceSize offsets[] = {0};
+	vkCmdBindVertexBuffers(command_buffers[current_frame], 0,1, vertex_buffers, offsets);
+
 	// We specified viewport and scissor to be dynamic so we set them here.
 	VkViewport viewport = (VkViewport){
 		.x=0.f,
@@ -730,7 +773,9 @@ void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
 		.extent = swapchain_extent
 	};
 	vkCmdSetScissor(command_buffers[current_frame], 0, 1, &scissor);
-	vkCmdDraw(command_buffers[current_frame], 3, 1, 0, 0); // args: cb, vertexCount, instanceCount, firstVertex (lowest val of gl_VertexIndex), firstInstance
+
+	vkCmdDraw(command_buffers[current_frame], (uint32_t)n_vertices, 1,0,0); // args: cb, vertexCount, instanceCount, firstVertex (lowest val of gl_VertexIndex), firstInstance
+
 	vkCmdEndRenderPass(command_buffers[current_frame]);
 	if(vkEndCommandBuffer(command_buffers[current_frame]) != VK_SUCCESS) printf("Failed to record command buffer! :(");
 }
@@ -849,6 +894,7 @@ void initVulkan() {
 	createGraphicsPipeline();
 	createFramebuffers();
 	createCommandPool();
+	createVertexBuffer();
 	createCommandBuffers();
 	createSyncObjects();
 }
@@ -863,6 +909,9 @@ void mainLoop() {
 
 void cleanup() {
 	cleanupSwapchain();
+
+	vkDestroyBuffer(dev,vertex_buffer,NULL);
+	vkFreeMemory(dev, vertex_buffer_memory, NULL);
 
 	for(uint32_t i=0; i<MAX_FRAMES_IN_FLIGHT; i++) {
 		vkDestroySemaphore(dev,image_available_semaphores[i],NULL);
