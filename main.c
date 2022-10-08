@@ -1,4 +1,5 @@
 #define GLFW_INCLUDE_VULKAN
+//#define GLM_FORCE_RADIANS cglm radians by default
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
 #include <stdio.h>
@@ -6,6 +7,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <time.h>
 // #include <shaderc/shaderc.h>
 
 // define "DEBUG" during compilation to use validation layers
@@ -45,6 +47,7 @@ VkFormat swapchain_image_format;
 VkExtent2D swapchain_extent;
 VkImageView *swapchain_image_views;
 VkRenderPass render_pass;
+VkDescriptorSetLayout descriptor_set_layout;
 VkPipelineLayout pipeline_layout;
 VkPipeline graphics_pipeline;
 VkFramebuffer *swapchain_framebuffers;
@@ -57,6 +60,8 @@ VkBuffer vertex_buffer;
 VkDeviceMemory vertex_buffer_memory;
 VkBuffer index_buffer;
 VkDeviceMemory index_buffer_memory;
+VkBuffer *uniform_buffers;
+VkDeviceMemory *uniform_buffers_memory;
 
 typedef struct { vec2 pos; vec3 color; } Vertex;
 #define n_vertices 4 
@@ -70,6 +75,12 @@ const Vertex vertices[n_vertices] = {
 const uint16_t indices[n_indices] = {
 	0,1,2,2,3,0
 };
+
+typedef struct {
+	mat4 model;
+	mat4 view;
+	mat4 proj;
+} UniformBufferObject;
 
 VkVertexInputBindingDescription *getBindingDescription() {
 	VkVertexInputBindingDescription *binding_desc = malloc(sizeof(VkVertexInputBindingDescription));
@@ -505,6 +516,22 @@ VkPipelineDynamicStateCreateInfo dynamic_state_create_info = (VkPipelineDynamicS
 	.pDynamicStates = dynamic_states
 };
 
+void createDescriptorSetLayout() {
+	VkDescriptorSetLayoutBinding ubo_layout_binding = (VkDescriptorSetLayoutBinding){
+		.binding = 0,
+		.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+		.descriptorCount = 1,
+		.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+		.pImmutableSamplers = NULL // optional
+	};
+	VkDescriptorSetLayoutCreateInfo layout_info = (VkDescriptorSetLayoutCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+		.bindingCount = 1,
+		.pBindings = &ubo_layout_binding
+	};
+	if(vkCreateDescriptorSetLayout(dev, &layout_info, NULL, &descriptor_set_layout) != VK_SUCCESS) {printf("Failed to create descriptor set layout!"); exit(1);}
+};
+
 void createGraphicsPipeline() {
 	unsigned long vert_shdr_sz, frag_shdr_sz;
 	char* vert_shdr_code = readFile("shaders/vert.spv",&vert_shdr_sz);
@@ -626,8 +653,8 @@ void createGraphicsPipeline() {
 
 	VkPipelineLayoutCreateInfo pipeline_layout_create_info = (VkPipelineLayoutCreateInfo){
 		.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-		.setLayoutCount = 0,
-		.pSetLayouts = NULL,
+		.setLayoutCount = 1,
+		.pSetLayouts = &descriptor_set_layout,
 		.pushConstantRangeCount = 0,
 		.pPushConstantRanges = NULL
 	};
@@ -798,6 +825,17 @@ void createIndexBuffer() {
 	vkFreeMemory(dev, staging_buffer_memory, NULL);
 }
 
+void createUniformBuffers() {
+	// We need multiple uniform buffers b/c w/ multiple frames in flight we don't want to update one uniform buffer in prep of next frame while the prev frame is still reading from it!
+	// We don't do all that staging buffer stuff here b/c we're changing this pretty much e/ frame so it would actually probably add more overhead than it's worth.
+	VkDeviceSize buffer_size = sizeof(UniformBufferObject);
+	uniform_buffers        = malloc(sizeof(VkBuffer)       * MAX_FRAMES_IN_FLIGHT);
+	uniform_buffers_memory = malloc(sizeof(VkDeviceMemory) * MAX_FRAMES_IN_FLIGHT);
+	for(size_t i=0; i<MAX_FRAMES_IN_FLIGHT; i++)
+		createBuffer(buffer_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &uniform_buffers[i], &uniform_buffers_memory[i]);
+	// No vkMapMemory here, we'll do that thru a separate fn b/c we want more control
+};
+
 void createCommandBuffers() {
 	command_buffers = malloc(sizeof(VkCommandBuffer) * MAX_FRAMES_IN_FLIGHT);
 
@@ -914,6 +952,29 @@ void recreateSwapchain() {
 }
 
 
+void updateUniformBuffer(uint32_t current_image) {
+	static struct timespec ts_app_start = (struct timespec){.tv_sec=0};
+	if(ts_app_start.tv_sec == 0) timespec_get(&ts_app_start,TIME_UTC); // To get around plain C not allowing static vars to be declared with an initial non-constant value
+	struct timespec ts_current;  timespec_get(&ts_current,  TIME_UTC);
+	float t_running = 0;
+	t_running += (ts_current.tv_sec-ts_app_start.tv_sec) + ((ts_current.tv_nsec-ts_app_start.tv_nsec)/1000000000.0);
+	//printf("%f\n",t_running);
+
+	mat4 I; glm_mat4_identity(I);
+	UniformBufferObject ubo;// = (UniformBufferObject){.model=I, .view=I, .proj=I}; // Can't assign vals to array types (which mat4 are *float[4]). Need use memcpy or in this case glm_mat4_copy().
+	glm_mat4_copy(I,ubo.model); glm_mat4_copy(I,ubo.view); glm_mat4_copy(I,ubo.proj);
+	glm_rotate(ubo.model, t_running*(3.141f/2.f), (vec3){0.f,0.f,1.f}), // rot 90°/s about z-axis
+	glm_lookat((vec3){2.f,2.f,2.f}, (vec3){0.f,0.f,0.f}, (vec3){0.f,0.f,1.f}, ubo.view); 
+	glm_perspective((3.131f/2.f), swapchain_extent.width / (float)swapchain_extent.height, .1f, 10.f, ubo.proj);
+	ubo.proj[1][1] *= -1;
+
+	void *data;
+	vkMapMemory(dev, uniform_buffers_memory[current_image], 0, sizeof(ubo), 0, &data);
+	memcpy(data, &ubo, sizeof(ubo));
+	vkUnmapMemory(dev, uniform_buffers_memory[current_image]);
+
+}
+
 void drawFrame() {
 	vkWaitForFences(dev, 1, &in_flight_fences[current_frame], VK_TRUE, UINT64_MAX);
 
@@ -925,6 +986,8 @@ void drawFrame() {
 	vkResetFences(dev, 1, &in_flight_fences[current_frame]);
 	vkResetCommandBuffer(command_buffers[current_frame],0);
 	recordCommandBuffer(command_buffers[current_frame],image_index);
+
+	updateUniformBuffer(current_frame);
 
 	VkSemaphore wait_semaphores[] = {image_available_semaphores[current_frame]};
 	VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
@@ -970,11 +1033,13 @@ void initVulkan() {
 	createSwapchain();
 	createImageViews();
 	createRenderPass();
+	createDescriptorSetLayout();
 	createGraphicsPipeline();
 	createFramebuffers();
 	createCommandPool();
 	createVertexBuffer();
 	createIndexBuffer();
+	createUniformBuffers();
 	createCommandBuffers();
 	createSyncObjects();
 }
@@ -989,6 +1054,13 @@ void mainLoop() {
 
 void cleanup() {
 	cleanupSwapchain();
+
+	for(size_t i=0; i<MAX_FRAMES_IN_FLIGHT; i++) {
+		vkDestroyBuffer(dev,uniform_buffers[i],NULL);
+		vkFreeMemory(dev,uniform_buffers_memory[i],NULL);
+	}
+
+	vkDestroyDescriptorSetLayout(dev,descriptor_set_layout,NULL);
 
 	vkDestroyBuffer(dev,index_buffer,NULL);
 	vkFreeMemory(dev,index_buffer_memory,NULL);
