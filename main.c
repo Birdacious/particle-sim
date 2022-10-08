@@ -55,14 +55,22 @@ VkFence *in_flight_fences;
 bool framebuffer_resized = false;
 VkBuffer vertex_buffer;
 VkDeviceMemory vertex_buffer_memory;
+VkBuffer index_buffer;
+VkDeviceMemory index_buffer_memory;
 
 typedef struct { vec2 pos; vec3 color; } Vertex;
-#define n_vertices 3
+#define n_vertices 4 
 const Vertex vertices[n_vertices] = {
-	{{ .0f,-.5f}, {1.f,0.f,0.f}},
-	{{ .5f, .5f}, {0.f,1.f,0.f}},
-	{{-.5f, .5f}, {1.f,1.f,0.f}}
+	{{-.5f,-.5f}, {1.f,0.f,0.f}},
+	{{ .5f,-.5f}, {0.f,1.f,0.f}},
+	{{ .5f, .5f}, {1.f,1.f,0.f}},
+	{{-.5f, .5f}, {0.f,0.f,1.f}}
 };
+#define n_indices 6
+const uint16_t indices[n_indices] = {
+	0,1,2,2,3,0
+};
+
 VkVertexInputBindingDescription *getBindingDescription() {
 	VkVertexInputBindingDescription *binding_desc = malloc(sizeof(VkVertexInputBindingDescription));
 	*binding_desc = (VkVertexInputBindingDescription){
@@ -770,6 +778,26 @@ void createVertexBuffer() {
 	vkFreeMemory(dev, staging_buffer_memory, NULL);
 }
 
+void createIndexBuffer() {
+	VkDeviceSize buffer_size = sizeof(indices[0]) * n_indices;
+	VkBuffer staging_buffer;
+	VkDeviceMemory staging_buffer_memory;
+	createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer, &staging_buffer_memory);
+
+	void* data;
+	vkMapMemory(dev, staging_buffer_memory, 0, buffer_size, 0, &data);
+	// s/t s/t tutorial says s/t about flushing memory explicitly vs ..._COHERENT_BIT, idk
+	memcpy(data, indices, (size_t)buffer_size);
+	vkUnmapMemory(dev, staging_buffer_memory);
+
+	createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &index_buffer, &index_buffer_memory);
+
+	copyBuffer(staging_buffer, index_buffer, buffer_size);
+
+	vkDestroyBuffer(dev, staging_buffer, NULL);
+	vkFreeMemory(dev, staging_buffer_memory, NULL);
+}
+
 void createCommandBuffers() {
 	command_buffers = malloc(sizeof(VkCommandBuffer) * MAX_FRAMES_IN_FLIGHT);
 
@@ -807,6 +835,7 @@ void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
 	VkBuffer vertex_buffers[] = {vertex_buffer};
 	VkDeviceSize offsets[] = {0};
 	vkCmdBindVertexBuffers(command_buffers[current_frame], 0,1, vertex_buffers, offsets);
+	vkCmdBindIndexBuffer(command_buffers[current_frame], index_buffer, 0, VK_INDEX_TYPE_UINT16);
 
 	// We specified viewport and scissor to be dynamic so we set them here.
 	VkViewport viewport = (VkViewport){
@@ -824,7 +853,7 @@ void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
 	};
 	vkCmdSetScissor(command_buffers[current_frame], 0, 1, &scissor);
 
-	vkCmdDraw(command_buffers[current_frame], (uint32_t)n_vertices, 1,0,0); // args: cb, vertexCount, instanceCount, firstVertex (lowest val of gl_VertexIndex), firstInstance
+	vkCmdDrawIndexed(command_buffers[current_frame], (uint32_t)n_indices, 1,0,0,0); // args: cb, vertexCount, instanceCount, firstVertex (lowest val of gl_VertexIndex), firstInstance
 
 	vkCmdEndRenderPass(command_buffers[current_frame]);
 	if(vkEndCommandBuffer(command_buffers[current_frame]) != VK_SUCCESS) printf("Failed to record command buffer! :(");
@@ -945,6 +974,7 @@ void initVulkan() {
 	createFramebuffers();
 	createCommandPool();
 	createVertexBuffer();
+	createIndexBuffer();
 	createCommandBuffers();
 	createSyncObjects();
 }
@@ -960,8 +990,10 @@ void mainLoop() {
 void cleanup() {
 	cleanupSwapchain();
 
+	vkDestroyBuffer(dev,index_buffer,NULL);
+	vkFreeMemory(dev,index_buffer_memory,NULL);
 	vkDestroyBuffer(dev,vertex_buffer,NULL);
-	vkFreeMemory(dev, vertex_buffer_memory, NULL);
+	vkFreeMemory(dev,vertex_buffer_memory,NULL);
 
 	for(uint32_t i=0; i<MAX_FRAMES_IN_FLIGHT; i++) {
 		vkDestroySemaphore(dev,image_available_semaphores[i],NULL);
