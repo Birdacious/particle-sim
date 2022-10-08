@@ -684,6 +684,7 @@ void createCommandPool() {
 	if(vkCreateCommandPool(dev, &pool_info, NULL, &command_pool) != VK_SUCCESS) printf("Failed to create command pool! :(");
 }
 
+
 uint32_t findMemoryType(uint32_t type_filter, VkMemoryPropertyFlags properties) {
 	VkPhysicalDeviceMemoryProperties mem_properties; // Contains 2 arrays: memoryTypes, memoryHeaps
 	vkGetPhysicalDeviceMemoryProperties(physical_dev, &mem_properties);
@@ -692,32 +693,81 @@ uint32_t findMemoryType(uint32_t type_filter, VkMemoryPropertyFlags properties) 
 	}
 	printf("Failed to find suitable memory type! :("); exit(1);
 }
-void createVertexBuffer() {
+
+void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer *buffer, VkDeviceMemory *buffer_memory) {
 	VkBufferCreateInfo buf_info = (VkBufferCreateInfo){
 		.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-		.size = sizeof(vertices[0]) * n_vertices,
-		.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+		.size = size,
+		.usage = usage,
 		.sharingMode = VK_SHARING_MODE_EXCLUSIVE
 	};
-	if(vkCreateBuffer(dev, &buf_info, NULL, &vertex_buffer) != VK_SUCCESS) printf("Failed to create vertex buffer! :(");
+	if(vkCreateBuffer(dev, &buf_info, NULL, buffer) != VK_SUCCESS) printf("Failed to create vertex buffer! :(");
 
 	VkMemoryRequirements mem_reqs; // struct containing: size, alignment, memoryTypeBits
-	vkGetBufferMemoryRequirements(dev, vertex_buffer, &mem_reqs);
+	vkGetBufferMemoryRequirements(dev, *buffer, &mem_reqs);
 	
 	VkMemoryAllocateInfo alloc_info = (VkMemoryAllocateInfo){
 		.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
 		.allocationSize = mem_reqs.size,
-		.memoryTypeIndex = findMemoryType(mem_reqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+		.memoryTypeIndex = findMemoryType(mem_reqs.memoryTypeBits, properties)
 	};
-	if(vkAllocateMemory(dev, &alloc_info, NULL, &vertex_buffer_memory) != VK_SUCCESS) printf("Failed to allocate vertex buffer memory! :(");
+	if(vkAllocateMemory(dev, &alloc_info, NULL, buffer_memory) != VK_SUCCESS) printf("Failed to allocate vertex buffer memory! :(");
 
-	vkBindBufferMemory(dev, vertex_buffer, vertex_buffer_memory, 0);
+	vkBindBufferMemory(dev, *buffer, *buffer_memory, 0);
+}
+
+void copyBuffer(VkBuffer src_buf, VkBuffer dst_buf, VkDeviceSize size) {
+	VkCommandBufferAllocateInfo alloc_info = (VkCommandBufferAllocateInfo){
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+		.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+		.commandPool = command_pool,
+		.commandBufferCount = 1
+	};
+	VkCommandBuffer tmp_cmd_buf;
+	vkAllocateCommandBuffers(dev, &alloc_info, &tmp_cmd_buf);
+
+	VkCommandBufferBeginInfo begin_info = (VkCommandBufferBeginInfo){
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+		.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
+	};
+	vkBeginCommandBuffer(tmp_cmd_buf, &begin_info);
+
+	VkBufferCopy copy_region = (VkBufferCopy){
+		.srcOffset = 0, // optional
+		.dstOffset = 0, // optional
+		.size = size
+	};
+	vkCmdCopyBuffer(tmp_cmd_buf, src_buf, dst_buf, 1, &copy_region);
+	vkEndCommandBuffer(tmp_cmd_buf);
+
+	VkSubmitInfo submit_info = (VkSubmitInfo){
+		.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+		.commandBufferCount = 1,
+		.pCommandBuffers = &tmp_cmd_buf
+	};
+	vkQueueSubmit(graphics_queue, 1, &submit_info, VK_NULL_HANDLE);
+	vkQueueWaitIdle(graphics_queue); // Alternatively use a fence, which could allow schedule multiple transfers at same time and wait for all to complete. Driver might be able to optimize for you a little better that way.
+	vkFreeCommandBuffers(dev, command_pool, 1, &tmp_cmd_buf);
+}
+
+void createVertexBuffer() {
+	VkDeviceSize buffer_size = sizeof(vertices[0]) * n_vertices;
+	VkBuffer staging_buffer;
+	VkDeviceMemory staging_buffer_memory;
+	createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer, &staging_buffer_memory);
 
 	void* data;
-	vkMapMemory(dev, vertex_buffer_memory, 0, buf_info.size, 0, &data);
+	vkMapMemory(dev, staging_buffer_memory, 0, buffer_size, 0, &data);
 	// s/t s/t tutorial says s/t about flushing memory explicitly vs ..._COHERENT_BIT, idk
-	memcpy(data, vertices, (size_t)buf_info.size);
-	vkUnmapMemory(dev, vertex_buffer_memory);
+	memcpy(data, vertices, (size_t)buffer_size);
+	vkUnmapMemory(dev, staging_buffer_memory);
+
+	createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vertex_buffer, &vertex_buffer_memory);
+
+	copyBuffer(staging_buffer, vertex_buffer, buffer_size);
+
+	vkDestroyBuffer(dev, staging_buffer, NULL);
+	vkFreeMemory(dev, staging_buffer_memory, NULL);
 }
 
 void createCommandBuffers() {
