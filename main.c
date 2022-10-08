@@ -48,6 +48,8 @@ VkExtent2D swapchain_extent;
 VkImageView *swapchain_image_views;
 VkRenderPass render_pass;
 VkDescriptorSetLayout descriptor_set_layout;
+VkDescriptorPool descriptor_pool;
+VkDescriptorSet *descriptor_sets;
 VkPipelineLayout pipeline_layout;
 VkPipeline graphics_pipeline;
 VkFramebuffer *swapchain_framebuffers;
@@ -77,9 +79,10 @@ const uint16_t indices[n_indices] = {
 };
 
 typedef struct {
-	mat4 model;
-	mat4 view;
-	mat4 proj;
+	vec2 aligning_test;
+	_Alignas(16) mat4 model; // Seems cglm auto aligns by default. But w/ nested structures this could break down. So just in case _Alignas.
+	_Alignas(16) mat4 view;
+	_Alignas(16) mat4 proj;
 } UniformBufferObject;
 
 VkVertexInputBindingDescription *getBindingDescription() {
@@ -506,16 +509,6 @@ void createRenderPass() {
 }
 
 
-VkDynamicState dynamic_states[] = {
-	VK_DYNAMIC_STATE_VIEWPORT,
-	VK_DYNAMIC_STATE_SCISSOR
-};
-VkPipelineDynamicStateCreateInfo dynamic_state_create_info = (VkPipelineDynamicStateCreateInfo){
-	.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-	.dynamicStateCount = 2, // see dynamic_states above
-	.pDynamicStates = dynamic_states
-};
-
 void createDescriptorSetLayout() {
 	VkDescriptorSetLayoutBinding ubo_layout_binding = (VkDescriptorSetLayoutBinding){
 		.binding = 0,
@@ -530,8 +523,68 @@ void createDescriptorSetLayout() {
 		.pBindings = &ubo_layout_binding
 	};
 	if(vkCreateDescriptorSetLayout(dev, &layout_info, NULL, &descriptor_set_layout) != VK_SUCCESS) {printf("Failed to create descriptor set layout!"); exit(1);}
-};
+}
 
+void createDescriptorPool() {
+	VkDescriptorPoolSize pool_size = (VkDescriptorPoolSize){
+		.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+		.descriptorCount = (uint32_t)MAX_FRAMES_IN_FLIGHT
+	};
+	VkDescriptorPoolCreateInfo pool_info = (VkDescriptorPoolCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+		.poolSizeCount = 1,
+		.pPoolSizes = &pool_size,
+		.maxSets = (uint32_t)MAX_FRAMES_IN_FLIGHT,
+	};
+	if(vkCreateDescriptorPool(dev, &pool_info, NULL, &descriptor_pool) != VK_SUCCESS) {printf("Failed to create descriptor pool! :("); exit(1);}
+}
+
+void createDescriptorSets() {
+	VkDescriptorSetLayout *layouts = malloc(sizeof(VkDescriptorSetLayout) * MAX_FRAMES_IN_FLIGHT);
+	for(size_t i=0; i<(uint32_t)MAX_FRAMES_IN_FLIGHT; i++) {
+		layouts[i]=descriptor_set_layout;
+		//memcpy(layouts[i], descriptor_set_layout, sizeof(VkDescriptorSetLayout)*1);
+	}
+	VkDescriptorSetAllocateInfo alloc_info = (VkDescriptorSetAllocateInfo){
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+		.descriptorPool = descriptor_pool,
+		.descriptorSetCount = (uint32_t)MAX_FRAMES_IN_FLIGHT,
+		.pSetLayouts = layouts
+	};
+	descriptor_sets = malloc(sizeof(VkDescriptorSet) * MAX_FRAMES_IN_FLIGHT);
+	if(vkAllocateDescriptorSets(dev, &alloc_info, descriptor_sets) != VK_SUCCESS) {printf("Failed to allocate descriptor sets! :("); exit(1);}
+
+	for(size_t i=0; i<MAX_FRAMES_IN_FLIGHT; i++) {
+		VkDescriptorBufferInfo buf_info = (VkDescriptorBufferInfo){
+			.buffer = uniform_buffers[i],
+			.offset = 0,
+			.range = sizeof(UniformBufferObject), // or VK_WHOLE_SIZE b/c we are always overwriting the whole uniform buf e/ frame
+		};
+		VkWriteDescriptorSet descriptor_write = (VkWriteDescriptorSet){
+			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+			.dstSet = descriptor_sets[i],
+			.dstBinding = 0,
+			.dstArrayElement = 0,
+			.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+			.descriptorCount = 1,
+			.pBufferInfo = &buf_info,
+			.pImageInfo = NULL, // optional
+			.pTexelBufferView = NULL // optional
+		};
+		vkUpdateDescriptorSets(dev, 1, &descriptor_write, 0, NULL);
+	}
+}
+
+
+VkDynamicState dynamic_states[] = {
+	VK_DYNAMIC_STATE_VIEWPORT,
+	VK_DYNAMIC_STATE_SCISSOR
+};
+VkPipelineDynamicStateCreateInfo dynamic_state_create_info = (VkPipelineDynamicStateCreateInfo){
+	.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+	.dynamicStateCount = 2, // see dynamic_states above
+	.pDynamicStates = dynamic_states
+};
 void createGraphicsPipeline() {
 	unsigned long vert_shdr_sz, frag_shdr_sz;
 	char* vert_shdr_code = readFile("shaders/vert.spv",&vert_shdr_sz);
@@ -597,7 +650,7 @@ void createGraphicsPipeline() {
 		.polygonMode = VK_POLYGON_MODE_FILL,
 		.lineWidth = 1.f, // thicker widths maybe not available on some hardware, reqs "wideLines" GPU feature.
 		.cullMode = VK_CULL_MODE_BACK_BIT,
-		.frontFace = VK_FRONT_FACE_CLOCKWISE,
+		.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
 		.depthBiasEnable = VK_FALSE,
 		.depthBiasConstantFactor = 0.f,
 		.depthBiasClamp = 0.f,
@@ -687,6 +740,7 @@ void createGraphicsPipeline() {
 	vkDestroyShaderModule(dev,vert_shdr_module,NULL);
 	vkDestroyShaderModule(dev,frag_shdr_module,NULL);
 	free(vert_shdr_code); free(frag_shdr_code);
+	free(binding_desc); free(attr_descs);
 }
 
 
@@ -829,7 +883,7 @@ void createUniformBuffers() {
 	// We need multiple uniform buffers b/c w/ multiple frames in flight we don't want to update one uniform buffer in prep of next frame while the prev frame is still reading from it!
 	// We don't do all that staging buffer stuff here b/c we're changing this pretty much e/ frame so it would actually probably add more overhead than it's worth.
 	VkDeviceSize buffer_size = sizeof(UniformBufferObject);
-	uniform_buffers        = malloc(sizeof(VkBuffer)       * MAX_FRAMES_IN_FLIGHT);
+	uniform_buffers = malloc(sizeof(VkBuffer)       * MAX_FRAMES_IN_FLIGHT);
 	uniform_buffers_memory = malloc(sizeof(VkDeviceMemory) * MAX_FRAMES_IN_FLIGHT);
 	for(size_t i=0; i<MAX_FRAMES_IN_FLIGHT; i++)
 		createBuffer(buffer_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &uniform_buffers[i], &uniform_buffers_memory[i]);
@@ -891,6 +945,7 @@ void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
 	};
 	vkCmdSetScissor(command_buffers[current_frame], 0, 1, &scissor);
 
+	vkCmdBindDescriptorSets(command_buffers[current_frame], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0,1, &descriptor_sets[current_frame], 0,NULL);
 	vkCmdDrawIndexed(command_buffers[current_frame], (uint32_t)n_indices, 1,0,0,0); // args: cb, vertexCount, instanceCount, firstVertex (lowest val of gl_VertexIndex), firstInstance
 
 	vkCmdEndRenderPass(command_buffers[current_frame]);
@@ -972,7 +1027,6 @@ void updateUniformBuffer(uint32_t current_image) {
 	vkMapMemory(dev, uniform_buffers_memory[current_image], 0, sizeof(ubo), 0, &data);
 	memcpy(data, &ubo, sizeof(ubo));
 	vkUnmapMemory(dev, uniform_buffers_memory[current_image]);
-
 }
 
 void drawFrame() {
@@ -1040,6 +1094,8 @@ void initVulkan() {
 	createVertexBuffer();
 	createIndexBuffer();
 	createUniformBuffers();
+	createDescriptorPool();
+	createDescriptorSets();
 	createCommandBuffers();
 	createSyncObjects();
 }
@@ -1060,6 +1116,8 @@ void cleanup() {
 		vkFreeMemory(dev,uniform_buffers_memory[i],NULL);
 	}
 
+	vkDestroyDescriptorPool(dev,descriptor_pool,NULL); // automatically frees descriptor sets too
+	//free(descriptor_sets);
 	vkDestroyDescriptorSetLayout(dev,descriptor_set_layout,NULL);
 
 	vkDestroyBuffer(dev,index_buffer,NULL);
