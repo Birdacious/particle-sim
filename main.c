@@ -9,6 +9,8 @@
 #include <string.h>
 #include <time.h>
 // #include <shaderc/shaderc.h>
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 
 // define "DEBUG" during compilation to use validation layers
 // TODO: There's an extra part in the tut about Message Callbacks but idc rn
@@ -64,6 +66,8 @@ VkBuffer index_buffer;
 VkDeviceMemory index_buffer_memory;
 VkBuffer *uniform_buffers;
 VkDeviceMemory *uniform_buffers_memory;
+VkImage texture_image;
+VkDeviceMemory texture_image_memory;
 
 typedef struct { vec2 pos; vec3 color; } Vertex;
 #define n_vertices 4 
@@ -805,21 +809,43 @@ void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyF
 	vkBindBufferMemory(dev, *buffer, *buffer_memory, 0);
 }
 
-void copyBuffer(VkBuffer src_buf, VkBuffer dst_buf, VkDeviceSize size) {
+// Simple way of submitting commands. To make sure things happen synchronously, just waits for queue to be idle (QueueWaitIdle).
+  // However, for better performance, you could/should combine operations into a single cmd buffer and execute them asynchronously for better throughput.
+    // (In the case of image texture stuff, especially the transitions and copy in createTextureImage() ).
+		// To do that ^ for this ^ example, you could create a setup_cmd_buffer that the helper functions (transition and copy etc.) record into.
+		// and a flushSetupCommands() to execute the commands that have been recorded so far.
+VkCommandBuffer beginSingleTimeCommands() {
 	VkCommandBufferAllocateInfo alloc_info = (VkCommandBufferAllocateInfo){
 		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
 		.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
 		.commandPool = command_pool,
 		.commandBufferCount = 1
 	};
-	VkCommandBuffer tmp_cmd_buf;
-	vkAllocateCommandBuffers(dev, &alloc_info, &tmp_cmd_buf);
+	VkCommandBuffer cb;
+	vkAllocateCommandBuffers(dev, &alloc_info, &cb);
 
 	VkCommandBufferBeginInfo begin_info = (VkCommandBufferBeginInfo){
 		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
 		.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
 	};
-	vkBeginCommandBuffer(tmp_cmd_buf, &begin_info);
+	vkBeginCommandBuffer(cb, &begin_info);
+	return cb;
+}
+void endSingleTimeCommands(VkCommandBuffer cb) {
+	vkEndCommandBuffer(cb);
+	VkSubmitInfo submit_info = (VkSubmitInfo){
+		.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+		.commandBufferCount = 1,
+		.pCommandBuffers = &cb
+	};
+	vkQueueSubmit(graphics_queue, 1, &submit_info, VK_NULL_HANDLE);
+	vkQueueWaitIdle(graphics_queue);
+
+	vkFreeCommandBuffers(dev, command_pool, 1, &cb);
+}
+
+void copyBuffer(VkBuffer src_buf, VkBuffer dst_buf, VkDeviceSize size) {
+	VkCommandBuffer tmp_cmd_buf = beginSingleTimeCommands();
 
 	VkBufferCopy copy_region = (VkBufferCopy){
 		.srcOffset = 0, // optional
@@ -827,16 +853,121 @@ void copyBuffer(VkBuffer src_buf, VkBuffer dst_buf, VkDeviceSize size) {
 		.size = size
 	};
 	vkCmdCopyBuffer(tmp_cmd_buf, src_buf, dst_buf, 1, &copy_region);
-	vkEndCommandBuffer(tmp_cmd_buf);
 
-	VkSubmitInfo submit_info = (VkSubmitInfo){
-		.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-		.commandBufferCount = 1,
-		.pCommandBuffers = &tmp_cmd_buf
+	endSingleTimeCommands(tmp_cmd_buf);
+}
+
+void copyBufferToImage(VkBuffer buf, VkImage image, uint32_t w, uint32_t h) {
+	VkCommandBuffer cb = beginSingleTimeCommands();
+
+	VkBufferImageCopy region = (VkBufferImageCopy){
+		.bufferOffset = 0,
+		.bufferRowLength = 0, // this and ImageHeight being 0 means pixels are simply tightly packed, no padding
+		.bufferImageHeight = 0,
+		.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+		.imageSubresource.mipLevel = 0,
+		.imageSubresource.baseArrayLayer = 0,
+		.imageSubresource.layerCount = 1,
+		.imageOffset = {0,0,0},
+		.imageExtent = {w,h,1}
 	};
-	vkQueueSubmit(graphics_queue, 1, &submit_info, VK_NULL_HANDLE);
-	vkQueueWaitIdle(graphics_queue); // Alternatively use a fence, which could allow schedule multiple transfers at same time and wait for all to complete. Driver might be able to optimize for you a little better that way.
-	vkFreeCommandBuffers(dev, command_pool, 1, &tmp_cmd_buf);
+	vkCmdCopyBufferToImage(cb, buf, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region); // also possible to have an ~array~ of VkBufferImageCopy
+
+	endSingleTimeCommands(cb);
+}
+// NOTE: there exists VK_IMAGE_LAYOUT_GENERAL, which supports all operations! At the cost of some performance ofc.
+void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout old_layout, VkImageLayout new_layout) {
+	VkCommandBuffer cb = beginSingleTimeCommands();
+
+	// Barrier, typically used to make sure thing done being wrote to b4 reading. VkBufferMemoryBarrier for buffers too.
+	// But can also used to transition layouts.
+	VkImageMemoryBarrier barrier = (VkImageMemoryBarrier){
+		.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+		.oldLayout = old_layout, // VK_IMAGE_LAYOUT_UNDEFINED if you don't care about existing contents of image
+		.newLayout = new_layout,
+		.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, // used to transfer queue family ownership, but we're not doing that here
+		.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		.image = image,
+		.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+		.subresourceRange.baseMipLevel = 0,
+		.subresourceRange.levelCount = 1,
+		.subresourceRange.baseArrayLayer = 0,
+		.subresourceRange.layerCount = 1,
+		.srcAccessMask = 0, // todo just below
+		.dstAccessMask = 0  // todo just below
+	};
+	VkPipelineStageFlags src_stage, dst_stage;
+	if(old_layout == VK_IMAGE_LAYOUT_UNDEFINED && new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+		barrier.srcAccessMask = 0; // don't have to wait on anything
+		barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT; // earliest possible pipeline stage, don't have to wait on anything
+		dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT; // pseudo-stage where transfers happen
+	} else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+		barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+		dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+	} else {printf("Unsupported image layout transition! :("); exit(1);}
+
+	vkCmdPipelineBarrier(cb, src_stage,dst_stage, 0,0,NULL,0,NULL,1,&barrier);
+
+	endSingleTimeCommands(cb);
+}
+void createImage(uint32_t w, uint32_t h, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage *image, VkDeviceMemory *image_memory) {
+	VkImageCreateInfo image_info = (VkImageCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+		.imageType = VK_IMAGE_TYPE_2D,
+		.extent.width = w,
+		.extent.height = h,
+		.extent.depth = 1,
+		.mipLevels = 1,
+		.arrayLayers = 1,
+		.format = format,
+		.tiling = tiling, // if you wanna directly access texels in the image's memory, use _LINEAR instead of _OPTIMAL.
+		.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED, // i don't understant what dis measn
+		.usage = usage,
+		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+		.samples = VK_SAMPLE_COUNT_1_BIT, // SEE TUT, could be important to save allocating memory for "air blocks"
+		.flags = 0 // optional
+	};
+	if(vkCreateImage(dev, &image_info, NULL, image) != VK_SUCCESS) {printf("Failed to create image! :("); exit(1);}
+
+	VkMemoryRequirements mem_reqs;
+	vkGetImageMemoryRequirements(dev, *image, &mem_reqs);
+	VkMemoryAllocateInfo alloc_info = (VkMemoryAllocateInfo){
+		.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+		.allocationSize = mem_reqs.size,
+		.memoryTypeIndex = findMemoryType(mem_reqs.memoryTypeBits, properties)
+	};
+	if(vkAllocateMemory(dev, &alloc_info, NULL, image_memory) != VK_SUCCESS) {printf("Failed to allocate image memory! :("); exit(1);}
+
+	vkBindImageMemory(dev, *image, *image_memory, 0);
+}
+void createTextureImage() {
+	int tex_w, tex_h, tex_channels;
+	stbi_uc *pixels = stbi_load("textures/texture.jpg", &tex_w, &tex_h, &tex_channels, STBI_rgb_alpha);
+	VkDeviceSize image_size = tex_w*tex_h*4; // 4b per pixel
+	if(!pixels) {printf("Failed to load texture image! :("); exit(1);}
+
+	VkBuffer staging_buffer;
+	VkDeviceMemory staging_buffer_memory;
+	createBuffer(image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer, &staging_buffer_memory);
+
+	void* data;
+	vkMapMemory(dev, staging_buffer_memory, 0, image_size, 0, &data);
+	memcpy(data, pixels, (size_t)image_size);
+	vkUnmapMemory(dev, staging_buffer_memory);
+
+	stbi_image_free(pixels);
+
+	createImage(tex_w, tex_h, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texture_image, &texture_image_memory);
+
+	transitionImageLayout(texture_image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+	copyBufferToImage(staging_buffer, texture_image, (uint32_t)tex_w, (uint32_t)tex_h);
+	transitionImageLayout(texture_image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+	vkDestroyBuffer(dev, staging_buffer, NULL);
+	vkFreeMemory(dev, staging_buffer_memory, NULL);
 }
 
 void createVertexBuffer() {
@@ -889,6 +1020,7 @@ void createUniformBuffers() {
 		createBuffer(buffer_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &uniform_buffers[i], &uniform_buffers_memory[i]);
 	// No vkMapMemory here, we'll do that thru a separate fn b/c we want more control
 };
+
 
 void createCommandBuffers() {
 	command_buffers = malloc(sizeof(VkCommandBuffer) * MAX_FRAMES_IN_FLIGHT);
@@ -1091,6 +1223,7 @@ void initVulkan() {
 	createGraphicsPipeline();
 	createFramebuffers();
 	createCommandPool();
+	createTextureImage();
 	createVertexBuffer();
 	createIndexBuffer();
 	createUniformBuffers();
@@ -1110,6 +1243,9 @@ void mainLoop() {
 
 void cleanup() {
 	cleanupSwapchain();
+
+	vkDestroyImage(dev,texture_image,NULL);
+	vkFreeMemory(dev,texture_image_memory,NULL);
 
 	for(size_t i=0; i<MAX_FRAMES_IN_FLIGHT; i++) {
 		vkDestroyBuffer(dev,uniform_buffers[i],NULL);
