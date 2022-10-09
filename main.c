@@ -71,13 +71,17 @@ VkDeviceMemory texture_image_memory;
 VkImageView texture_image_view;
 VkSampler texture_sampler;
 
-typedef struct { vec2 pos; vec3 color; } Vertex;
+typedef struct {
+	vec2 pos;
+	vec3 color;
+	vec2 tex_coord;
+} Vertex;
 #define n_vertices 4 
 const Vertex vertices[n_vertices] = {
-	{{-.5f,-.5f}, {1.f,0.f,0.f}},
-	{{ .5f,-.5f}, {0.f,1.f,0.f}},
-	{{ .5f, .5f}, {1.f,1.f,0.f}},
-	{{-.5f, .5f}, {0.f,0.f,1.f}}
+	{{-.5f,-.5f}, {1.f,0.f,0.f}, {1.f,0.f}},
+	{{ .5f,-.5f}, {0.f,1.f,0.f}, {0.f,0.f}},
+	{{ .5f, .5f}, {1.f,1.f,0.f}, {0.f,1.f}},
+	{{-.5f, .5f}, {0.f,0.f,1.f}, {1.f,1.f}}
 };
 #define n_indices 6
 const uint16_t indices[n_indices] = {
@@ -100,7 +104,7 @@ VkVertexInputBindingDescription *getBindingDescription() {
 	};
 	return binding_desc;
 }
-const int n_attr_descs = 2;
+const int n_attr_descs = 3;
 VkVertexInputAttributeDescription *getAttributeDescriptions() {
 	VkVertexInputAttributeDescription *attr_descs = malloc(n_attr_descs*sizeof(VkVertexInputAttributeDescription));
 	attr_descs[0] = (VkVertexInputAttributeDescription){
@@ -114,6 +118,12 @@ VkVertexInputAttributeDescription *getAttributeDescriptions() {
 		.location = 1,
 		.format = VK_FORMAT_R32G32B32_SFLOAT,
 		.offset = offsetof(Vertex,color)
+	};
+	attr_descs[2] = (VkVertexInputAttributeDescription){
+		.binding = 0,
+		.location = 2,
+		.format = VK_FORMAT_R32G32_SFLOAT,
+		.offset = offsetof(Vertex, tex_coord)
 	};
 	return attr_descs;
 }
@@ -524,28 +534,41 @@ void createRenderPass() {
 void createDescriptorSetLayout() {
 	VkDescriptorSetLayoutBinding ubo_layout_binding = (VkDescriptorSetLayoutBinding){
 		.binding = 0,
-		.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 		.descriptorCount = 1,
+		.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 		.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
 		.pImmutableSamplers = NULL // optional
 	};
+	VkDescriptorSetLayoutBinding sampler_layout_binding = (VkDescriptorSetLayoutBinding){
+		.binding = 1,
+		.descriptorCount = 1,
+		.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+		.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, // Note you could also use a texture sampler in VERTEX shader, e.g. deform vertices based on a heightmap texture
+		.pImmutableSamplers = NULL // optional
+	};
+	VkDescriptorSetLayoutBinding bindings[2] = {ubo_layout_binding, sampler_layout_binding};
 	VkDescriptorSetLayoutCreateInfo layout_info = (VkDescriptorSetLayoutCreateInfo){
 		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-		.bindingCount = 1,
-		.pBindings = &ubo_layout_binding
+		.bindingCount = 2, // note to self: beware magic number
+		.pBindings = bindings
 	};
 	if(vkCreateDescriptorSetLayout(dev, &layout_info, NULL, &descriptor_set_layout) != VK_SUCCESS) {printf("Failed to create descriptor set layout!"); exit(1);}
 }
 
 void createDescriptorPool() {
-	VkDescriptorPoolSize pool_size = (VkDescriptorPoolSize){
+	VkDescriptorPoolSize uni_pool_size = (VkDescriptorPoolSize){
 		.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 		.descriptorCount = (uint32_t)MAX_FRAMES_IN_FLIGHT
 	};
+	VkDescriptorPoolSize sampler_pool_size = (VkDescriptorPoolSize){
+		.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+		.descriptorCount = (uint32_t)MAX_FRAMES_IN_FLIGHT
+	};
+	VkDescriptorPoolSize pool_sizes[2] = {uni_pool_size, sampler_pool_size};
 	VkDescriptorPoolCreateInfo pool_info = (VkDescriptorPoolCreateInfo){
 		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-		.poolSizeCount = 1,
-		.pPoolSizes = &pool_size,
+		.poolSizeCount = 2, // beware magic number
+		.pPoolSizes = pool_sizes,
 		.maxSets = (uint32_t)MAX_FRAMES_IN_FLIGHT,
 	};
 	if(vkCreateDescriptorPool(dev, &pool_info, NULL, &descriptor_pool) != VK_SUCCESS) {printf("Failed to create descriptor pool! :("); exit(1);}
@@ -572,7 +595,13 @@ void createDescriptorSets() {
 			.offset = 0,
 			.range = sizeof(UniformBufferObject), // or VK_WHOLE_SIZE b/c we are always overwriting the whole uniform buf e/ frame
 		};
-		VkWriteDescriptorSet descriptor_write = (VkWriteDescriptorSet){
+		VkDescriptorImageInfo image_info = (VkDescriptorImageInfo){
+			.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			.imageView = texture_image_view,
+			.sampler = texture_sampler
+		};
+
+		VkWriteDescriptorSet uni_descriptor_write = (VkWriteDescriptorSet){
 			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 			.dstSet = descriptor_sets[i],
 			.dstBinding = 0,
@@ -583,7 +612,19 @@ void createDescriptorSets() {
 			.pImageInfo = NULL, // optional
 			.pTexelBufferView = NULL // optional
 		};
-		vkUpdateDescriptorSets(dev, 1, &descriptor_write, 0, NULL);
+		VkWriteDescriptorSet sampler_descriptor_write = (VkWriteDescriptorSet){
+			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+			.dstSet = descriptor_sets[i],
+			.dstBinding = 1,
+			.dstArrayElement = 0,
+			.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+			.descriptorCount = 1,
+			.pImageInfo = NULL, // optional
+			.pImageInfo = &image_info,
+			.pTexelBufferView = NULL // optional
+		};
+		VkWriteDescriptorSet descriptor_writes[2] = {uni_descriptor_write, sampler_descriptor_write};
+		vkUpdateDescriptorSets(dev, 2, descriptor_writes, 0, NULL);
 	}
 }
 
@@ -953,7 +994,7 @@ void createImage(uint32_t w, uint32_t h, VkFormat format, VkImageTiling tiling, 
 }
 void createTextureImage() {
 	int tex_w, tex_h, tex_channels;
-	stbi_uc *pixels = stbi_load("textures/texture.jpg", &tex_w, &tex_h, &tex_channels, STBI_rgb_alpha);
+	stbi_uc *pixels = stbi_load("textures/lorikeet.jpg", &tex_w, &tex_h, &tex_channels, STBI_rgb_alpha);
 	VkDeviceSize image_size = tex_w*tex_h*4; // 4b per pixel
 	if(!pixels) {printf("Failed to load texture image! :("); exit(1);}
 
@@ -1188,7 +1229,7 @@ void updateUniformBuffer(uint32_t current_image) {
 	glm_mat4_copy(I,ubo.model); glm_mat4_copy(I,ubo.view); glm_mat4_copy(I,ubo.proj);
 	glm_rotate(ubo.model, t_running*(3.141f/2.f), (vec3){0.f,0.f,1.f}), // rot 90°/s about z-axis
 	glm_lookat((vec3){2.f,2.f,2.f}, (vec3){0.f,0.f,0.f}, (vec3){0.f,0.f,1.f}, ubo.view); 
-	glm_perspective((3.131f/2.f), swapchain_extent.width / (float)swapchain_extent.height, .1f, 10.f, ubo.proj);
+	glm_perspective((3.131f/4.f), swapchain_extent.width / (float)swapchain_extent.height, .1f, 10.f, ubo.proj);
 	ubo.proj[1][1] *= -1;
 
 	void *data;
