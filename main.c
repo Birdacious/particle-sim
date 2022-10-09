@@ -3,15 +3,21 @@
 #define CGLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <error.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 // #include <shaderc/shaderc.h>
 #define STB_IMAGE_IMPLEMENTATION
+#define TINYOBJ_LOADER_C_IMPLEMENTATION
 #include "stb_image.h"
+#include "tinyobj_loader_c.h"
 
 // define "DEBUG" during compilation to use validation layers
 // TODO: There's an extra part in the tut about Message Callbacks but idc rn
@@ -34,6 +40,8 @@ bool checkValidationLayerSupport() {
 	return true;
 }
 
+const char *MODEL_PATH = "models/viking_room.obj";
+const char *TEXTURE_PATH = "textures/viking_room.png";
 const uint32_t WIDTH  = 800;
 const uint32_t HEIGHT = 600;
 const uint32_t MAX_FRAMES_IN_FLIGHT = 2; uint32_t current_frame = 0;
@@ -80,23 +88,10 @@ typedef struct {
 	vec3 color;
 	vec2 tex_coord;
 } Vertex;
-#define n_vertices 8 
-const Vertex vertices[n_vertices] = {
-	{{-.5f,-.5f, .0f}, {1.f,0.f,0.f}, {1.f,0.f}},
-	{{ .5f,-.5f, .0f}, {0.f,1.f,0.f}, {0.f,0.f}},
-	{{ .5f, .5f, .0f}, {1.f,1.f,0.f}, {0.f,1.f}},
-	{{-.5f, .5f, .0f}, {0.f,0.f,1.f}, {1.f,1.f}},
-	
-	{{-.5f,-.5f,-.5f}, {1.f,0.f,0.f}, {1.f,0.f}},
-	{{ .5f,-.5f,-.5f}, {0.f,1.f,0.f}, {0.f,0.f}},
-	{{ .5f, .5f,-.5f}, {1.f,1.f,0.f}, {0.f,1.f}},
-	{{-.5f, .5f,-.5f}, {0.f,0.f,1.f}, {1.f,1.f}}
-};
-#define n_indices 12
-const uint16_t indices[n_indices] = {
-	0,1,2,2,3,0,
-	4,5,6,6,7,4
-};
+
+Vertex *vertices; unsigned int n_vertices;
+uint32_t *indices; unsigned int n_indices;
+
 
 typedef struct {
 	vec2 aligning_test;
@@ -133,7 +128,7 @@ VkVertexInputAttributeDescription *getAttributeDescriptions() {
 		.binding = 0,
 		.location = 2,
 		.format = VK_FORMAT_R32G32_SFLOAT,
-		.offset = offsetof(Vertex, tex_coord)
+		.offset = offsetof(Vertex,tex_coord)
 	};
 	return attr_descs;
 }
@@ -1064,7 +1059,7 @@ void createDepthResources() {
 
 void createTextureImage() {
 	int tex_w, tex_h, tex_channels;
-	stbi_uc *pixels = stbi_load("textures/lorikeet.jpg", &tex_w, &tex_h, &tex_channels, STBI_rgb_alpha);
+	stbi_uc *pixels = stbi_load(TEXTURE_PATH, &tex_w, &tex_h, &tex_channels, STBI_rgb_alpha);
 	VkDeviceSize image_size = tex_w*tex_h*4; // 4b per pixel
 	if(!pixels) {printf("Failed to load texture image! :("); exit(1);}
 
@@ -1116,9 +1111,148 @@ void createTextureSampler() {
 	if(vkCreateSampler(dev, &sampler_info, NULL, &texture_sampler) != VK_SUCCESS) {printf("Failed to create texture sampler! :("); exit(1);}
 }
 
+static char* mmap_file(size_t* len, const char* filename) {
+#ifdef _WIN64
+  HANDLE file =
+      CreateFileA(filename, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                  FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+
+  if (file == INVALID_HANDLE_VALUE) { /* E.g. Model may not have materials. */
+    return NULL;
+  }
+
+  HANDLE fileMapping = CreateFileMapping(file, NULL, PAGE_READONLY, 0, 0, NULL);
+  assert(fileMapping != INVALID_HANDLE_VALUE);
+
+  LPVOID fileMapView = MapViewOfFile(fileMapping, FILE_MAP_READ, 0, 0, 0);
+  char* fileMapViewChar = (char*)fileMapView;
+  assert(fileMapView != NULL);
+
+  DWORD file_size = GetFileSize(file, NULL);
+  (*len) = (size_t)file_size;
+
+  return fileMapViewChar;
+#else
+
+  struct stat sb;
+  char* p;
+  int fd;
+
+  fd = open(filename, O_RDONLY);
+  if (fd == -1) {
+    perror("open");
+    return NULL;
+  }
+
+  if (fstat(fd, &sb) == -1) {
+    perror("fstat");
+    return NULL;
+  }
+
+  if (!S_ISREG(sb.st_mode)) {
+    fprintf(stderr, "%s is not a file\n", filename);
+    return NULL;
+  }
+
+  p = (char*)mmap(0, sb.st_size, PROT_READ, MAP_SHARED, fd, 0);
+
+  if (p == MAP_FAILED) {
+    perror("mmap");
+    return NULL;
+  }
+
+  if (close(fd) == -1) {
+    perror("close");
+    return NULL;
+  }
+
+  (*len) = sb.st_size;
+
+  return p;
+
+#endif
+}
+
+static void get_file_data(void* ctx, const char* filename, const int is_mtl,
+                          const char* obj_filename, char** data, size_t* len) {
+  (void)ctx;
+  if (!filename) {
+    fprintf(stderr, "null filename\n");
+    (*data) = NULL;
+    (*len) = 0;
+    return;
+  }
+  size_t data_len = 0;
+  *data = mmap_file(&data_len, filename);
+  (*len) = data_len;
+}
+
+void loadModel() {
+	tinyobj_attrib_t    attrib;
+	tinyobj_shape_t    *shapes = NULL;    size_t n_shapes;
+	tinyobj_material_t *materials = NULL; size_t n_materials;
+	int ret = tinyobj_parse_obj(&attrib, &shapes, &n_shapes, &materials, &n_materials, MODEL_PATH, get_file_data, NULL, TINYOBJ_FLAG_TRIANGULATE);
+	if(ret != TINYOBJ_SUCCESS) {printf("Failed to load model! :("); exit(1);}
+	printf("n_shapes: %lu\nn_materials: %lu\nn_vertices: %u\nn_faces: %u\nnum_faces_num_vertices: %u\n", n_shapes, n_materials, attrib.num_vertices, attrib.num_faces, attrib.num_face_num_verts);
+
+	//n_indices = attrib.num_faces;
+	//indices = calloc(n_indices, sizeof(uint32_t));
+	//n_vertices = attrib.num_faces;
+	//vertices = calloc(n_vertices, sizeof(Vertex));
+	n_indices = shapes[0].length * 3;
+	indices = calloc(n_indices, sizeof(uint32_t));
+	n_vertices = shapes[0].length * 3;
+	vertices = calloc(n_vertices, sizeof(Vertex));
+	
+	static int v_count = 0;
+	static int vt_count = 0;
+	for(size_t s=0;                     s < n_shapes; s++) { printf("SHAPE #: %lu; f_offset: %u; shape_len: %u\n",s, shapes[s].face_offset, shapes[s].length);
+	for(size_t f=shapes[s].face_offset; f < shapes[s].face_offset+shapes[s].length-1; f++) {
+		// n_v = face_num_verts[f]; // assume 3 (triangulated)
+		for(int i=0; i<3; i++)  indices[3*f+i] = 3*f+i;
+		for(int i=0; i<3; i++) {vertices[v_count].pos[i]        = attrib.vertices [attrib.faces[3*f+0].v_idx *3+i];} v_count+=1;
+		for(int i=0; i<3; i++) {vertices[v_count].pos[i]        = attrib.vertices [attrib.faces[3*f+1].v_idx *3+i];} v_count+=1;
+		for(int i=0; i<3; i++) {vertices[v_count].pos[i]        = attrib.vertices [attrib.faces[3*f+2].v_idx *3+i];} v_count+=1;
+		for(int i=0; i<2; i++) {vertices[vt_count].tex_coord[i] = attrib.texcoords[attrib.faces[3*f+0].vt_idx*2+i];} vt_count+=1;
+		for(int i=0; i<2; i++) {vertices[vt_count].tex_coord[i] = attrib.texcoords[attrib.faces[3*f+1].vt_idx*2+i];} vt_count+=1;
+		for(int i=0; i<2; i++) {vertices[vt_count].tex_coord[i] = attrib.texcoords[attrib.faces[3*f+2].vt_idx*2+i];} vt_count+=1;
+		for(int i=1; i<4; i++)  vertices[vt_count-i].tex_coord[1]= 1.f - vertices[vt_count-i].tex_coord[1];
+	}}
+	//for(unsigned int i = 0; i<shapes[0].length; i++) printf("%u ",indices[i]);
+	//printf("HELLO%u\n",indices[10]);
+	
+	// TODO: almost works but after a sec lags real bad and freezes
+	//static int v_count = 0;
+	//static int vt_count = 0;
+	//for(unsigned int f=0; f<attrib.num_face_num_verts; f++) {
+	//	indices[3*f+0] = (uint32_t)(f*3+0);
+  //  indices[3*f+1] = (uint32_t)(f*3+1);
+  //  indices[3*f+2] = (uint32_t)(f*3+2);
+
+	//	tinyobj_vertex_index_t ind0 = attrib.faces[3*f+0];
+	//  tinyobj_vertex_index_t ind1 = attrib.faces[3*f+1];
+	//	tinyobj_vertex_index_t ind2 = attrib.faces[3*f+2];
+
+	//	for(int vi=0; vi<3; vi++) { vertices[v_count].pos[vi] = (float)attrib.vertices[ind0.v_idx*3 + vi]; } v_count+=1;
+	//	for(int vi=0; vi<3; vi++) { vertices[v_count].pos[vi] = (float)attrib.vertices[ind1.v_idx*3 + vi]; } v_count+=1;
+	//	for(int vi=0; vi<3; vi++) { vertices[v_count].pos[vi] = (float)attrib.vertices[ind2.v_idx*3 + vi]; } v_count+=1;
+
+	//	vertices[vt_count].tex_coord[0] =       attrib.texcoords[ind0.vt_idx*2 + 0];
+	//  vertices[vt_count].tex_coord[1] = 1.f - attrib.texcoords[ind0.vt_idx*2 + 1]; vt_count += 1;
+	//	vertices[vt_count].tex_coord[0] =       attrib.texcoords[ind1.vt_idx*2 + 0];
+	//	vertices[vt_count].tex_coord[1] = 1.f - attrib.texcoords[ind1.vt_idx*2 + 1]; vt_count += 1;
+	//	vertices[vt_count].tex_coord[0] =       attrib.texcoords[ind2.vt_idx*2 + 0];
+	//	vertices[vt_count].tex_coord[1] = 1.f - attrib.texcoords[ind2.vt_idx*2 + 1]; vt_count += 1;
+	//}
+
+	tinyobj_attrib_free(&attrib);
+	tinyobj_shapes_free(shapes,n_shapes);
+	tinyobj_materials_free(materials,n_materials);
+}
+
 
 void createVertexBuffer() {
-	VkDeviceSize buffer_size = sizeof(vertices[0]) * n_vertices;
+	VkDeviceSize buffer_size = sizeof(Vertex) * n_vertices;
 	VkBuffer staging_buffer;
 	VkDeviceMemory staging_buffer_memory;
 	createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer, &staging_buffer_memory);
@@ -1138,7 +1272,7 @@ void createVertexBuffer() {
 }
 
 void createIndexBuffer() {
-	VkDeviceSize buffer_size = sizeof(indices[0]) * n_indices;
+	VkDeviceSize buffer_size = sizeof(uint32_t) * n_indices;
 	VkBuffer staging_buffer;
 	VkDeviceMemory staging_buffer_memory;
 	createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer, &staging_buffer_memory);
@@ -1211,7 +1345,7 @@ void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
 	VkBuffer vertex_buffers[] = {vertex_buffer};
 	VkDeviceSize offsets[] = {0};
 	vkCmdBindVertexBuffers(command_buffers[current_frame], 0,1, vertex_buffers, offsets);
-	vkCmdBindIndexBuffer(command_buffers[current_frame], index_buffer, 0, VK_INDEX_TYPE_UINT16);
+	vkCmdBindIndexBuffer(command_buffers[current_frame], index_buffer, 0, VK_INDEX_TYPE_UINT32);
 
 	// We specified viewport and scissor to be dynamic so we set them here.
 	VkViewport viewport = (VkViewport){
@@ -1384,6 +1518,7 @@ void initVulkan() {
 	createTextureImage();
 	createTextureImageView();
 	createTextureSampler();
+	loadModel();
 	createVertexBuffer();
 	createIndexBuffer();
 	createUniformBuffers();
