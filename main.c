@@ -68,6 +68,8 @@ VkBuffer *uniform_buffers;
 VkDeviceMemory *uniform_buffers_memory;
 VkImage texture_image;
 VkDeviceMemory texture_image_memory;
+VkImageView texture_image_view;
+VkSampler texture_sampler;
 
 typedef struct { vec2 pos; vec3 color; } Vertex;
 #define n_vertices 4 
@@ -239,10 +241,10 @@ SwapchainSupportDetails querySwapchainSupport(VkPhysicalDevice phys_dev) {
 
 bool isDeviceSuitable(VkPhysicalDevice phys_dev) {
 	// There's plenty you could do here to select the device you want, but idc.
-	//VkPhysicalDeviceProperties          dev_properties;
-	//VkPhysicalDeviceFeatures            dev_features;
-	//vkGetPhysicalDeviceProperties(dev, &dev_properties);
-	//vkGetPhysicalDeviceFeatures  (dev, &dev_features);
+	//VkPhysicalDeviceProperties dev_properties;
+	VkPhysicalDeviceFeatures   supported_features; 
+	//vkGetPhysicalDeviceProperties(phys_dev, &dev_properties);
+	vkGetPhysicalDeviceFeatures  (phys_dev, &supported_features);
 
 	QueueFamilyIndices inds; findQueueFamilies(phys_dev, &inds);
 
@@ -262,7 +264,8 @@ bool isDeviceSuitable(VkPhysicalDevice phys_dev) {
 	return (inds.graphicsFamily != UINT32_MAX &&
 			    inds.presentFamily != UINT32_MAX &&
 					supports_extensions &&
-					swapchain_adequate);
+					swapchain_adequate &&
+					supported_features.samplerAnisotropy);
 }
 
 VkSurfaceFormatKHR chooseSwapSurfaceFormat(const VkSurfaceFormatKHR available_formats[], uint32_t n_formats) {
@@ -336,13 +339,14 @@ void createLogicalDevice() {
 	//queue_create_infos[1] = queue_create_infos[0];
 	//queue_create_infos[1].queueFamilyIndex = inds.presentFamily;
 
-	// VkPhysicalDeviceFeatures dev_features;
+	VkPhysicalDeviceFeatures device_features = (VkPhysicalDeviceFeatures){.samplerAnisotropy=VK_TRUE};
+	// Possible addition: if anisotropy not available, conditionally set sampler_info.anisoTropyEnable = VK_FALSE and .maxAnisotropy = 1.f (in createTextureSampler) if not available
 
 	VkDeviceCreateInfo create_info = (VkDeviceCreateInfo){
 		.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
 		.queueCreateInfoCount = 1,
 		.pQueueCreateInfos = queue_create_infos,
-		.pEnabledFeatures = NULL,
+		.pEnabledFeatures = &device_features,
 		.enabledExtensionCount = n_req_extensions,
 		.ppEnabledExtensionNames = req_device_extensions
 	};
@@ -408,28 +412,32 @@ void createSwapchain() {
 	swapchain_extent = extent;
 }
 
+VkImageView createImageView(VkImage image, VkFormat format) {
+	VkImageViewCreateInfo create_info = (VkImageViewCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+		.image = image,
+		.viewType = VK_IMAGE_VIEW_TYPE_2D,
+		.format = format,
+		.components.r = VK_COMPONENT_SWIZZLE_IDENTITY,
+		.components.g = VK_COMPONENT_SWIZZLE_IDENTITY,
+		.components.b = VK_COMPONENT_SWIZZLE_IDENTITY,
+		.components.a = VK_COMPONENT_SWIZZLE_IDENTITY, // try changing these for fun!
+		.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+		.subresourceRange.baseMipLevel = 0,
+		.subresourceRange.levelCount = 1,
+		.subresourceRange.baseArrayLayer = 0,
+		.subresourceRange.layerCount = 1,
+		.flags = 0,
+		.pNext = NULL
+	};
+	VkImageView image_view;
+	if(vkCreateImageView(dev, &create_info, NULL, &image_view) != VK_SUCCESS) {printf("Failed to create image view! :("); exit(1);}
+	return image_view;
+}
 void createImageViews() {
 	swapchain_image_views = malloc(sizeof(VkImageView) * n_image); // MALLOC'D swapchain_image_views
-	for(uint32_t i=0; i < n_image; i++) {
-		VkImageViewCreateInfo create_info = (VkImageViewCreateInfo){
-			.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-			.image = swapchain_images[i],
-			.viewType = VK_IMAGE_VIEW_TYPE_2D,
-			.format = swapchain_image_format,
-			.components.r = VK_COMPONENT_SWIZZLE_IDENTITY,
-			.components.g = VK_COMPONENT_SWIZZLE_IDENTITY,
-			.components.b = VK_COMPONENT_SWIZZLE_IDENTITY,
-			.components.a = VK_COMPONENT_SWIZZLE_IDENTITY, // try changing these for fun!
-			.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-			.subresourceRange.baseMipLevel = 0,
-			.subresourceRange.levelCount = 1,
-			.subresourceRange.baseArrayLayer = 0,
-			.subresourceRange.layerCount = 1,
-			.flags = 0,
-			.pNext = NULL
-		};
-		if(vkCreateImageView(dev, &create_info, NULL, &swapchain_image_views[i]) != VK_SUCCESS) printf("Swapchain image view (index %u) creation failed! :(",i);
-	}
+	for(uint32_t i=0; i < n_image; i++)
+		swapchain_image_views[i] = createImageView(swapchain_images[i], swapchain_image_format);
 }
 
 
@@ -970,6 +978,34 @@ void createTextureImage() {
 	vkFreeMemory(dev, staging_buffer_memory, NULL);
 }
 
+void createTextureImageView() {
+	texture_image_view = createImageView(texture_image, VK_FORMAT_R8G8B8A8_SRGB);
+}
+
+void createTextureSampler() {
+	VkPhysicalDeviceProperties properties; vkGetPhysicalDeviceProperties(physical_dev,&properties);
+	VkSamplerCreateInfo sampler_info = (VkSamplerCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+		.magFilter = VK_FILTER_LINEAR, // Also VK_FILTER_NEAREST
+		.minFilter = VK_FILTER_LINEAR, // ^
+		.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT, // U,V,W analagous to X,Y,Z but for texture coords
+		.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT, // < ^ v additional options: _MIRRORED_REPEAt, _CLAMP_TO_EDGE, _MIRROR_CLAMP_TO_EDGE, _CLAMP_TO_BORDER
+		.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+		.anisotropyEnable = VK_TRUE,
+		.maxAnisotropy = properties.limits.maxSamplerAnisotropy,
+		.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK, // for _MODE_CLAMP_TO_BORDER above
+		.unnormalizedCoordinates = VK_FALSE, // [0,tex_w) & [0,tex_h) unnormalized vs. [0,1) normalized. Normalized makes it possible to use textures of various resolutions much simpler!
+		.compareEnable = VK_FALSE, // mainly used for shadow maps
+		.compareOp = VK_COMPARE_OP_ALWAYS,
+		.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+		.mipLodBias = 0.f,
+		.minLod = 0.f,
+		.maxLod = 0.f
+	};
+	if(vkCreateSampler(dev, &sampler_info, NULL, &texture_sampler) != VK_SUCCESS) {printf("Failed to create texture sampler! :("); exit(1);}
+}
+
+
 void createVertexBuffer() {
 	VkDeviceSize buffer_size = sizeof(vertices[0]) * n_vertices;
 	VkBuffer staging_buffer;
@@ -1224,6 +1260,8 @@ void initVulkan() {
 	createFramebuffers();
 	createCommandPool();
 	createTextureImage();
+	createTextureImageView();
+	createTextureSampler();
 	createVertexBuffer();
 	createIndexBuffer();
 	createUniformBuffers();
@@ -1244,6 +1282,8 @@ void mainLoop() {
 void cleanup() {
 	cleanupSwapchain();
 
+	vkDestroySampler(dev,texture_sampler,NULL);
+	vkDestroyImageView(dev,texture_image_view,NULL);
 	vkDestroyImage(dev,texture_image,NULL);
 	vkFreeMemory(dev,texture_image_memory,NULL);
 
