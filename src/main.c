@@ -18,6 +18,11 @@
 #define TINYOBJ_LOADER_C_IMPLEMENTATION
 #include "stb_image.h"
 #include "tinyobj_loader_c.h"
+#define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
+#define CIMGUI_USE_GLFW
+#define CIMGUI_USE_VULKAN
+#include "cimgui.h"
+#include "cimgui_impl.h"
 
 // define "DEBUG" during compilation to use validation layers
 // TODO: There's an extra part in the tut about Message Callbacks but idc rn
@@ -82,6 +87,9 @@ VkSampler texture_sampler;
 VkImage depth_image;
 VkDeviceMemory depth_image_memory;
 VkImageView depth_image_view;
+
+VkDescriptorPool imgui_descriptor_pool;
+
 
 typedef struct {
 	vec3 pos;
@@ -189,7 +197,6 @@ typedef struct {
 	uint32_t graphicsFamily;
   uint32_t presentFamily;
 } QueueFamilyIndices;
-
 void findQueueFamilies(VkPhysicalDevice phys_dev, QueueFamilyIndices* inds) {
 	inds->graphicsFamily=UINT32_MAX;
 	inds->presentFamily=UINT32_MAX; // If it's still UINT32_MAX after we ask for the index, the queue family probably doesn't exist (b/c I'm guessing the index won't be max int)
@@ -233,7 +240,6 @@ typedef struct {
 	VkSurfaceFormatKHR* formats;           uint32_t n_format;
 	VkPresentModeKHR* presentModes;        uint32_t n_presentMode;
 } SwapchainSupportDetails;
-
 SwapchainSupportDetails querySwapchainSupport(VkPhysicalDevice phys_dev) {
 	SwapchainSupportDetails details;
 
@@ -613,8 +619,8 @@ void createDescriptorPool() {
 void createDescriptorSets() {
 	VkDescriptorSetLayout *layouts = malloc(sizeof(VkDescriptorSetLayout) * MAX_FRAMES_IN_FLIGHT);
 	for(size_t i=0; i<(uint32_t)MAX_FRAMES_IN_FLIGHT; i++) {
-		layouts[i]=descriptor_set_layout;
-		//memcpy(layouts[i], descriptor_set_layout, sizeof(VkDescriptorSetLayout)*1);
+		//layouts[i]=descriptor_set_layout;
+		memcpy(layouts+i, &descriptor_set_layout, sizeof(VkDescriptorSetLayout));
 	}
 	VkDescriptorSetAllocateInfo alloc_info = (VkDescriptorSetAllocateInfo){
 		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -911,11 +917,11 @@ void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyF
     // (In the case of image texture stuff, especially the transitions and copy in createTextureImage() ).
 		// To do that ^ for this ^ example, you could create a setup_cmd_buffer that the helper functions (transition and copy etc.) record into.
 		// and a flushSetupCommands() to execute the commands that have been recorded so far.
-VkCommandBuffer beginSingleTimeCommands() {
+VkCommandBuffer beginSingleTimeCommands(VkCommandPool cmd_pool) {
 	VkCommandBufferAllocateInfo alloc_info = (VkCommandBufferAllocateInfo){
 		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
 		.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-		.commandPool = command_pool,
+		.commandPool = cmd_pool,
 		.commandBufferCount = 1
 	};
 	VkCommandBuffer cb;
@@ -928,7 +934,7 @@ VkCommandBuffer beginSingleTimeCommands() {
 	vkBeginCommandBuffer(cb, &begin_info);
 	return cb;
 }
-void endSingleTimeCommands(VkCommandBuffer cb) {
+void endSingleTimeCommands(VkCommandBuffer cb, VkCommandPool cmd_pool) {
 	vkEndCommandBuffer(cb);
 	VkSubmitInfo submit_info = (VkSubmitInfo){
 		.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -938,11 +944,11 @@ void endSingleTimeCommands(VkCommandBuffer cb) {
 	vkQueueSubmit(graphics_queue, 1, &submit_info, VK_NULL_HANDLE);
 	vkQueueWaitIdle(graphics_queue);
 
-	vkFreeCommandBuffers(dev, command_pool, 1, &cb);
+	vkFreeCommandBuffers(dev, cmd_pool, 1, &cb);
 }
 
-void copyBuffer(VkBuffer src_buf, VkBuffer dst_buf, VkDeviceSize size) {
-	VkCommandBuffer tmp_cmd_buf = beginSingleTimeCommands();
+void copyBuffer(VkBuffer src_buf, VkBuffer dst_buf, VkDeviceSize size, VkCommandPool cmd_pool) {
+	VkCommandBuffer tmp_cmd_buf = beginSingleTimeCommands(cmd_pool);
 
 	VkBufferCopy copy_region = (VkBufferCopy){
 		.srcOffset = 0, // optional
@@ -951,11 +957,11 @@ void copyBuffer(VkBuffer src_buf, VkBuffer dst_buf, VkDeviceSize size) {
 	};
 	vkCmdCopyBuffer(tmp_cmd_buf, src_buf, dst_buf, 1, &copy_region);
 
-	endSingleTimeCommands(tmp_cmd_buf);
+	endSingleTimeCommands(tmp_cmd_buf, cmd_pool);
 }
 
 void copyBufferToImage(VkBuffer buf, VkImage image, uint32_t w, uint32_t h) {
-	VkCommandBuffer cb = beginSingleTimeCommands();
+	VkCommandBuffer cb = beginSingleTimeCommands(command_pool);
 
 	VkBufferImageCopy region = (VkBufferImageCopy){
 		.bufferOffset = 0,
@@ -970,11 +976,11 @@ void copyBufferToImage(VkBuffer buf, VkImage image, uint32_t w, uint32_t h) {
 	};
 	vkCmdCopyBufferToImage(cb, buf, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region); // also possible to have an ~array~ of VkBufferImageCopy
 
-	endSingleTimeCommands(cb);
+	endSingleTimeCommands(cb, command_pool);
 }
 // NOTE: there exists VK_IMAGE_LAYOUT_GENERAL, which supports all operations! At the cost of some performance ofc.
 void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout old_layout, VkImageLayout new_layout) {
-	VkCommandBuffer cb = beginSingleTimeCommands();
+	VkCommandBuffer cb = beginSingleTimeCommands(command_pool);
 
 	// Barrier, typically used to make sure thing done being wrote to b4 reading. VkBufferMemoryBarrier for buffers too.
 	// But can also used to transition layouts.
@@ -1008,7 +1014,7 @@ void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout old_lay
 
 	vkCmdPipelineBarrier(cb, src_stage,dst_stage, 0,0,NULL,0,NULL,1,&barrier);
 
-	endSingleTimeCommands(cb);
+	endSingleTimeCommands(cb, command_pool);
 }
 void createImage(uint32_t w, uint32_t h, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage *image, VkDeviceMemory *image_memory) {
 	VkImageCreateInfo image_info = (VkImageCreateInfo){
@@ -1133,38 +1139,19 @@ static char* mmap_file(size_t* len, const char* filename) {
 
   return fileMapViewChar;
 #else
-
   struct stat sb;
   char* p;
   int fd;
 
   fd = open(filename, O_RDONLY);
-  if (fd == -1) {
-    perror("open");
-    return NULL;
-  }
-
-  if (fstat(fd, &sb) == -1) {
-    perror("fstat");
-    return NULL;
-  }
-
-  if (!S_ISREG(sb.st_mode)) {
-    fprintf(stderr, "%s is not a file\n", filename);
-    return NULL;
-  }
+  if (fd == -1)             { perror("open"); return NULL; }
+  if (fstat(fd, &sb) == -1) { perror("fstat"); return NULL; }
+  if (!S_ISREG(sb.st_mode)) { fprintf(stderr, "%s is not a file\n", filename); return NULL; }
 
   p = (char*)mmap(0, sb.st_size, PROT_READ, MAP_SHARED, fd, 0);
 
-  if (p == MAP_FAILED) {
-    perror("mmap");
-    return NULL;
-  }
-
-  if (close(fd) == -1) {
-    perror("close");
-    return NULL;
-  }
+  if (p == MAP_FAILED) { perror("mmap"); return NULL; }
+  if (close(fd) == -1) { perror("close"); return NULL; }
 
   (*len) = sb.st_size;
 
@@ -1265,7 +1252,7 @@ void createVertexBuffer() {
 
 	createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vertex_buffer, &vertex_buffer_memory);
 
-	copyBuffer(staging_buffer, vertex_buffer, buffer_size);
+	copyBuffer(staging_buffer, vertex_buffer, buffer_size, command_pool);
 
 	vkDestroyBuffer(dev, staging_buffer, NULL);
 	vkFreeMemory(dev, staging_buffer_memory, NULL);
@@ -1285,7 +1272,7 @@ void createIndexBuffer() {
 
 	createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &index_buffer, &index_buffer_memory);
 
-	copyBuffer(staging_buffer, index_buffer, buffer_size);
+	copyBuffer(staging_buffer, index_buffer, buffer_size, command_pool);
 
 	vkDestroyBuffer(dev, staging_buffer, NULL);
 	vkFreeMemory(dev, staging_buffer_memory, NULL);
@@ -1365,6 +1352,8 @@ void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
 
 	vkCmdBindDescriptorSets(command_buffers[current_frame], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0,1, &descriptor_sets[current_frame], 0,NULL);
 	vkCmdDrawIndexed(command_buffers[current_frame], (uint32_t)n_indices, 1,0,0,0); // args: cb, vertexCount, instanceCount, firstVertex (lowest val of gl_VertexIndex), firstInstance
+
+  ImGui_ImplVulkan_RenderDrawData(igGetDrawData(), command_buffers[current_frame], VK_NULL_HANDLE); // ???
 
 	vkCmdEndRenderPass(command_buffers[current_frame]);
 	if(vkEndCommandBuffer(command_buffers[current_frame]) != VK_SUCCESS) printf("Failed to record command buffer! :(");
@@ -1453,6 +1442,9 @@ void updateUniformBuffer(uint32_t current_image) {
 }
 
 void drawFrame() {
+  igGetIO();
+  igRender();
+
 	vkWaitForFences(dev, 1, &in_flight_fences[current_frame], VK_TRUE, UINT64_MAX);
 
 	uint32_t image_index;
@@ -1502,6 +1494,70 @@ void drawFrame() {
 }
 
 
+// IMGUI STUFF
+void initImgui() {
+	// ImGUI descriptor pool
+	VkDescriptorPoolSize pool_sizes[] =	{
+		{ VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000 },
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000 },
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000 },
+		{ VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000 }
+	};
+
+	VkDescriptorPoolCreateInfo pool_info = {};
+	pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+	pool_info.maxSets = 1000;
+	pool_info.poolSizeCount = 11;
+	pool_info.pPoolSizes = pool_sizes;
+
+	if(vkCreateDescriptorPool(dev, &pool_info, NULL, &imgui_descriptor_pool) != VK_SUCCESS) printf("Failed to create ImGUI descriptor pool! :(");
+
+	// 2: initialize core imgui stuff
+	igCreateContext(NULL);
+
+	ImGui_ImplGlfw_InitForVulkan(window,true);
+
+  // IO
+  ImGuiIO* ioptr = igGetIO();
+  ioptr->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // enables Keyboard Controls
+  ioptr->IniFilename = NULL;
+  ImFontAtlas_AddFontFromFileTTF(ioptr->Fonts, "./lib/Px437_IBM_BIOS.ttf", 8.0f, 0, 0); // Cool font :)
+
+	//this initializes imgui for Vulkan
+	ImGui_ImplVulkan_InitInfo init_info = {};
+	init_info.Instance = instance;
+	init_info.PhysicalDevice = physical_dev;
+	init_info.Device = dev;
+	init_info.Queue = graphics_queue;
+	init_info.DescriptorPool = imgui_descriptor_pool;
+	init_info.MinImageCount = 3;
+	init_info.ImageCount = 3;
+	init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+
+	ImGui_ImplVulkan_Init(&init_info, render_pass); // TODO make new render pass for imgui?
+
+	// GPU command to upload imgui font textures
+  VkCommandBuffer cmd = beginSingleTimeCommands(command_pool); // TODO make new command pool for imgui?
+  ImGui_ImplVulkan_CreateFontsTexture(cmd);
+  endSingleTimeCommands(cmd, command_pool);
+
+	//clear font textures from cpu data
+	ImGui_ImplVulkan_DestroyFontUploadObjects();
+}
+void imguiFrame() {
+  bool b = true;
+  igShowDemoWindow(&b);
+}
+
+
 void initVulkan() {
 	createInstance();
 	createSurface();
@@ -1528,9 +1584,18 @@ void initVulkan() {
 	createSyncObjects();
 }
 
+
+
 void mainLoop() {
 	while(!glfwWindowShouldClose(window)) {
 		glfwPollEvents();
+
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    igNewFrame();
+
+    imguiFrame();
+
 		drawFrame();
 	}
 	vkDeviceWaitIdle(dev);
@@ -1553,6 +1618,8 @@ void cleanup() {
 	//free(descriptor_sets);
 	vkDestroyDescriptorSetLayout(dev,descriptor_set_layout,NULL);
 
+  vkDestroyDescriptorPool(dev,imgui_descriptor_pool,NULL);
+
 	vkDestroyBuffer(dev,index_buffer,NULL);
 	vkFreeMemory(dev,index_buffer_memory,NULL);
 	vkDestroyBuffer(dev,vertex_buffer,NULL);
@@ -1571,6 +1638,8 @@ void cleanup() {
 
 	free(swapchain_image_views); swapchain_image_views = VK_NULL_HANDLE;
 
+  ImGui_ImplVulkan_Shutdown();
+
 	vkDestroyDevice(dev,NULL);
 	vkDestroySurfaceKHR(instance,surface,NULL);
 	vkDestroyInstance(instance,NULL);
@@ -1581,8 +1650,9 @@ void cleanup() {
 void run() {
 	initWindow();
 	initVulkan();
-	mainLoop(window);
-	cleanup(window);
+  initImgui();
+	mainLoop();
+	cleanup();
 }
 
 int main() {
