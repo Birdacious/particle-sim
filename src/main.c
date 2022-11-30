@@ -3,21 +3,15 @@
 #define CGLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <error.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
 #include <time.h>
-#include <unistd.h>
 // #include <shaderc/shaderc.h>
 #define STB_IMAGE_IMPLEMENTATION
-#define TINYOBJ_LOADER_C_IMPLEMENTATION
 #include "stb_image.h"
-#include "tinyobj_loader_c.h"
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
 #define CIMGUI_USE_GLFW
 #define CIMGUI_USE_VULKAN
@@ -45,8 +39,6 @@ bool checkValidationLayerSupport() {
 	return true;
 }
 
-const char *MODEL_PATH = "models/viking_room.obj";
-const char *TEXTURE_PATH = "textures/viking_room.png";
 const uint32_t WIDTH  = 800;
 const uint32_t HEIGHT = 600;
 const uint32_t MAX_FRAMES_IN_FLIGHT = 2; uint32_t current_frame = 0;
@@ -80,16 +72,11 @@ VkBuffer index_buffer;
 VkDeviceMemory index_buffer_memory;
 VkBuffer *uniform_buffers;
 VkDeviceMemory *uniform_buffers_memory;
-VkImage texture_image;
-VkDeviceMemory texture_image_memory;
-VkImageView texture_image_view;
-VkSampler texture_sampler;
 VkImage depth_image;
 VkDeviceMemory depth_image_memory;
 VkImageView depth_image_view;
 
 VkDescriptorPool imgui_descriptor_pool;
-
 
 typedef struct {
 	vec3 pos;
@@ -97,9 +84,26 @@ typedef struct {
 	vec2 tex_coord;
 } Vertex;
 
-Vertex *vertices; unsigned int n_vertices;
-uint32_t *indices; unsigned int n_indices;
+#define n_vertices 8 
+const Vertex vertices[n_vertices] = {
+	{{-.5f,-.5f, .0f}, {1.f,0.f,0.f}, {1.f,0.f}},
+	{{ .5f,-.5f, .0f}, {0.f,1.f,0.f}, {0.f,0.f}},
+	{{ .5f, .5f, .0f}, {1.f,1.f,0.f}, {0.f,1.f}},
+	{{-.5f, .5f, .0f}, {0.f,0.f,1.f}, {1.f,1.f}},
+	
+	{{-.5f,-.5f,-.5f}, {1.f,0.f,0.f}, {1.f,0.f}},
+	{{ .5f,-.5f,-.5f}, {0.f,1.f,0.f}, {0.f,0.f}},
+	{{ .5f, .5f,-.5f}, {1.f,1.f,0.f}, {0.f,1.f}},
+	{{-.5f, .5f,-.5f}, {0.f,0.f,1.f}, {1.f,1.f}}
+};
+#define n_indices 12
+const uint16_t indices[n_indices] = {
+	0,1,2,2,3,0,
+	4,5,6,6,7,4
+};
 
+//Vertex *vertices; unsigned int n_vertices;
+//uint32_t *indices; unsigned int n_indices;
 
 typedef struct {
 	vec2 aligning_test;
@@ -167,7 +171,7 @@ void createInstance() {
 	.applicationVersion = VK_MAKE_VERSION(1,0,0),
 	.pEngineName = "No Engine",
 	.engineVersion = VK_MAKE_VERSION(1,0,0),
-	.apiVersion = VK_API_VERSION_1_0            };
+	.apiVersion = VK_API_VERSION_1_0                };
 
 	uint32_t glfwExtensionCount = 0;
 	const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
@@ -179,7 +183,7 @@ void createInstance() {
 	.enabledExtensionCount = glfwExtensionCount,
 	.ppEnabledExtensionNames = glfwExtensions,
 	.enabledLayerCount = 0,
-	.ppEnabledLayerNames = NULL                    };
+	.ppEnabledLayerNames = NULL                              };
 
 	#ifdef DEBUG
 	create_info.enabledLayerCount = n_req_val_lyrs;
@@ -336,11 +340,9 @@ void pickPhysicalDevice() {
 	vkEnumeratePhysicalDevices(instance, &n_phys_dev, phys_devs);
 	printf("%u = ndev\n",n_phys_dev);
 
-
 	for(uint32_t i=0; i<n_phys_dev; i++) {
 		VkPhysicalDevice phys_dev = phys_devs[i];
 		if(isDeviceSuitable(phys_dev)) {physical_dev = phys_dev; break;}
-		printf("is this the prob");
 		if(physical_dev == VK_NULL_HANDLE) {printf("No suitable GPUs! :(");}
 	}
 }
@@ -461,15 +463,6 @@ void createImageViews() {
 		swapchain_image_views[i] = createImageView(swapchain_images[i], swapchain_image_format, VK_IMAGE_ASPECT_COLOR_BIT);
 }
 
-
-// TODO: Failed attempt to get shaderc working (integrated glsl compilation)
-//void compileGlsl2Svp(char* source, shaderc_shader_kind kind) {
-//	const shaderc_compiler_t compiler;// = shaderc_compiler_initialize();
-//	shaderc_compile_options_t options;// = shaderc_compile_options_initialize();
-//	shaderc_compile_options_set_optimization_level(options, shaderc_optimization_level_size); // there's also "_performance" instead of "_size"
-//	
-//}
-
 char* readFile(char* filenm, unsigned long* sz) {
 	char* buf = NULL;
 	FILE* f = fopen(filenm,"rb");
@@ -478,7 +471,6 @@ char* readFile(char* filenm, unsigned long* sz) {
 		buf = malloc(bufsz+1); if(!buf)     printf("Mem error!");  // MALLOC'D shader file contents
 		if(fseek(f,0,SEEK_SET)!=0)          printf("AHHHH2");
 		fread(buf,1,bufsz,f);
-		//printf("BUFSZ: %ld",bufsz);
 		*sz = bufsz;
 		return buf;
 	}
@@ -581,17 +573,10 @@ void createDescriptorSetLayout() {
 		.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
 		.pImmutableSamplers = NULL // optional
 	};
-	VkDescriptorSetLayoutBinding sampler_layout_binding = (VkDescriptorSetLayoutBinding){
-		.binding = 1,
-		.descriptorCount = 1,
-		.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-		.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, // Note you could also use a texture sampler in VERTEX shader, e.g. deform vertices based on a heightmap texture
-		.pImmutableSamplers = NULL // optional
-	};
-	VkDescriptorSetLayoutBinding bindings[2] = {ubo_layout_binding, sampler_layout_binding};
+	VkDescriptorSetLayoutBinding bindings[1] = {ubo_layout_binding};
 	VkDescriptorSetLayoutCreateInfo layout_info = (VkDescriptorSetLayoutCreateInfo){
 		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-		.bindingCount = 2, // note to self: beware magic number
+		.bindingCount = 1, // note to self: beware magic number
 		.pBindings = bindings
 	};
 	if(vkCreateDescriptorSetLayout(dev, &layout_info, NULL, &descriptor_set_layout) != VK_SUCCESS) {printf("Failed to create descriptor set layout!"); exit(1);}
@@ -602,14 +587,10 @@ void createDescriptorPool() {
 		.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 		.descriptorCount = (uint32_t)MAX_FRAMES_IN_FLIGHT
 	};
-	VkDescriptorPoolSize sampler_pool_size = (VkDescriptorPoolSize){
-		.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-		.descriptorCount = (uint32_t)MAX_FRAMES_IN_FLIGHT
-	};
-	VkDescriptorPoolSize pool_sizes[2] = {uni_pool_size, sampler_pool_size};
+	VkDescriptorPoolSize pool_sizes[1] = {uni_pool_size};
 	VkDescriptorPoolCreateInfo pool_info = (VkDescriptorPoolCreateInfo){
 		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-		.poolSizeCount = 2, // beware magic number
+		.poolSizeCount = 1, // beware magic number
 		.pPoolSizes = pool_sizes,
 		.maxSets = (uint32_t)MAX_FRAMES_IN_FLIGHT,
 	};
@@ -637,11 +618,6 @@ void createDescriptorSets() {
 			.offset = 0,
 			.range = sizeof(UniformBufferObject), // or VK_WHOLE_SIZE b/c we are always overwriting the whole uniform buf e/ frame
 		};
-		VkDescriptorImageInfo image_info = (VkDescriptorImageInfo){
-			.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-			.imageView = texture_image_view,
-			.sampler = texture_sampler
-		};
 
 		VkWriteDescriptorSet uni_descriptor_write = (VkWriteDescriptorSet){
 			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -654,19 +630,9 @@ void createDescriptorSets() {
 			.pImageInfo = NULL, // optional
 			.pTexelBufferView = NULL // optional
 		};
-		VkWriteDescriptorSet sampler_descriptor_write = (VkWriteDescriptorSet){
-			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-			.dstSet = descriptor_sets[i],
-			.dstBinding = 1,
-			.dstArrayElement = 0,
-			.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-			.descriptorCount = 1,
-			.pImageInfo = NULL, // optional
-			.pImageInfo = &image_info,
-			.pTexelBufferView = NULL // optional
-		};
-		VkWriteDescriptorSet descriptor_writes[2] = {uni_descriptor_write, sampler_descriptor_write};
-		vkUpdateDescriptorSets(dev, 2, descriptor_writes, 0, NULL);
+
+		VkWriteDescriptorSet descriptor_writes[1] = {uni_descriptor_write};
+		vkUpdateDescriptorSets(dev, 1, descriptor_writes, 0, NULL);
 	}
 }
 
@@ -1047,7 +1013,6 @@ void createImage(uint32_t w, uint32_t h, VkFormat format, VkImageTiling tiling, 
 	vkBindImageMemory(dev, *image, *image_memory, 0);
 }
 
-
 bool hasStencilComponent(VkFormat format) {
 	return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
 }
@@ -1063,183 +1028,9 @@ void createDepthResources() {
 	//transitionImageLayout(depth_image, depth_format, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 }
 
-void createTextureImage() {
-	int tex_w, tex_h, tex_channels;
-	stbi_uc *pixels = stbi_load(TEXTURE_PATH, &tex_w, &tex_h, &tex_channels, STBI_rgb_alpha);
-	VkDeviceSize image_size = tex_w*tex_h*4; // 4b per pixel
-	if(!pixels) {printf("Failed to load texture image! :("); exit(1);}
-
-	VkBuffer staging_buffer;
-	VkDeviceMemory staging_buffer_memory;
-	createBuffer(image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer, &staging_buffer_memory);
-
-	void* data;
-	vkMapMemory(dev, staging_buffer_memory, 0, image_size, 0, &data);
-	memcpy(data, pixels, (size_t)image_size);
-	vkUnmapMemory(dev, staging_buffer_memory);
-
-	stbi_image_free(pixels);
-
-	createImage(tex_w, tex_h, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &texture_image, &texture_image_memory);
-
-	transitionImageLayout(texture_image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-	copyBufferToImage(staging_buffer, texture_image, (uint32_t)tex_w, (uint32_t)tex_h);
-	transitionImageLayout(texture_image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-	vkDestroyBuffer(dev, staging_buffer, NULL);
-	vkFreeMemory(dev, staging_buffer_memory, NULL);
-}
-
-void createTextureImageView() {
-	texture_image_view = createImageView(texture_image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
-}
-
-void createTextureSampler() {
-	VkPhysicalDeviceProperties properties; vkGetPhysicalDeviceProperties(physical_dev,&properties);
-	VkSamplerCreateInfo sampler_info = (VkSamplerCreateInfo){
-		.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-		.magFilter = VK_FILTER_LINEAR, // Also VK_FILTER_NEAREST
-		.minFilter = VK_FILTER_LINEAR, // ^
-		.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT, // U,V,W analagous to X,Y,Z but for texture coords
-		.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT, // < ^ v additional options: _MIRRORED_REPEAt, _CLAMP_TO_EDGE, _MIRROR_CLAMP_TO_EDGE, _CLAMP_TO_BORDER
-		.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-		.anisotropyEnable = VK_TRUE,
-		.maxAnisotropy = properties.limits.maxSamplerAnisotropy,
-		.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK, // for _MODE_CLAMP_TO_BORDER above
-		.unnormalizedCoordinates = VK_FALSE, // [0,tex_w) & [0,tex_h) unnormalized vs. [0,1) normalized. Normalized makes it possible to use textures of various resolutions much simpler!
-		.compareEnable = VK_FALSE, // mainly used for shadow maps
-		.compareOp = VK_COMPARE_OP_ALWAYS,
-		.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-		.mipLodBias = 0.f,
-		.minLod = 0.f,
-		.maxLod = 0.f
-	};
-	if(vkCreateSampler(dev, &sampler_info, NULL, &texture_sampler) != VK_SUCCESS) {printf("Failed to create texture sampler! :("); exit(1);}
-}
-
-static char* mmap_file(size_t* len, const char* filename) {
-#ifdef _WIN64
-  HANDLE file =
-      CreateFileA(filename, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
-                  FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-
-  if (file == INVALID_HANDLE_VALUE) { /* E.g. Model may not have materials. */
-    return NULL;
-  }
-
-  HANDLE fileMapping = CreateFileMapping(file, NULL, PAGE_READONLY, 0, 0, NULL);
-  assert(fileMapping != INVALID_HANDLE_VALUE);
-
-  LPVOID fileMapView = MapViewOfFile(fileMapping, FILE_MAP_READ, 0, 0, 0);
-  char* fileMapViewChar = (char*)fileMapView;
-  assert(fileMapView != NULL);
-
-  DWORD file_size = GetFileSize(file, NULL);
-  (*len) = (size_t)file_size;
-
-  return fileMapViewChar;
-#else
-  struct stat sb;
-  char* p;
-  int fd;
-
-  fd = open(filename, O_RDONLY);
-  if (fd == -1)             { perror("open"); return NULL; }
-  if (fstat(fd, &sb) == -1) { perror("fstat"); return NULL; }
-  if (!S_ISREG(sb.st_mode)) { fprintf(stderr, "%s is not a file\n", filename); return NULL; }
-
-  p = (char*)mmap(0, sb.st_size, PROT_READ, MAP_SHARED, fd, 0);
-
-  if (p == MAP_FAILED) { perror("mmap"); return NULL; }
-  if (close(fd) == -1) { perror("close"); return NULL; }
-
-  (*len) = sb.st_size;
-
-  return p;
-
-#endif
-}
-
-static void get_file_data(void* ctx, const char* filename, const int is_mtl,
-                          const char* obj_filename, char** data, size_t* len) {
-  (void)ctx;
-  if (!filename) {
-    fprintf(stderr, "null filename\n");
-    (*data) = NULL;
-    (*len) = 0;
-    return;
-  }
-  size_t data_len = 0;
-  *data = mmap_file(&data_len, filename);
-  (*len) = data_len;
-}
-
-void loadModel() {
-	tinyobj_attrib_t    attrib;
-	tinyobj_shape_t    *shapes = NULL;    size_t n_shapes;
-	tinyobj_material_t *materials = NULL; size_t n_materials;
-	int ret = tinyobj_parse_obj(&attrib, &shapes, &n_shapes, &materials, &n_materials, MODEL_PATH, get_file_data, NULL, TINYOBJ_FLAG_TRIANGULATE);
-	if(ret != TINYOBJ_SUCCESS) {printf("Failed to load model! :("); exit(1);}
-	printf("n_shapes: %lu\nn_materials: %lu\nn_vertices: %u\nn_faces: %u\nnum_faces_num_vertices: %u\n", n_shapes, n_materials, attrib.num_vertices, attrib.num_faces, attrib.num_face_num_verts);
-
-	//n_indices = attrib.num_faces;
-	//indices = calloc(n_indices, sizeof(uint32_t));
-	//n_vertices = attrib.num_faces;
-	//vertices = calloc(n_vertices, sizeof(Vertex));
-	n_indices = shapes[0].length * 3;
-	indices = calloc(n_indices, sizeof(uint32_t));
-	n_vertices = shapes[0].length * 3;
-	vertices = calloc(n_vertices, sizeof(Vertex));
-	
-	static int v_count = 0;
-	static int vt_count = 0;
-	for(size_t s=0;                     s < n_shapes; s++) { printf("SHAPE #: %lu; f_offset: %u; shape_len: %u\n",s, shapes[s].face_offset, shapes[s].length);
-	for(size_t f=shapes[s].face_offset; f < shapes[s].face_offset+shapes[s].length-1; f++) {
-		// n_v = face_num_verts[f]; // assume 3 (triangulated)
-		for(int i=0; i<3; i++)  indices[3*f+i] = 3*f+i;
-		for(int i=0; i<3; i++) {vertices[v_count].pos[i]        = attrib.vertices [attrib.faces[3*f+0].v_idx *3+i];} v_count+=1;
-		for(int i=0; i<3; i++) {vertices[v_count].pos[i]        = attrib.vertices [attrib.faces[3*f+1].v_idx *3+i];} v_count+=1;
-		for(int i=0; i<3; i++) {vertices[v_count].pos[i]        = attrib.vertices [attrib.faces[3*f+2].v_idx *3+i];} v_count+=1;
-		for(int i=0; i<2; i++) {vertices[vt_count].tex_coord[i] = attrib.texcoords[attrib.faces[3*f+0].vt_idx*2+i];} vt_count+=1;
-		for(int i=0; i<2; i++) {vertices[vt_count].tex_coord[i] = attrib.texcoords[attrib.faces[3*f+1].vt_idx*2+i];} vt_count+=1;
-		for(int i=0; i<2; i++) {vertices[vt_count].tex_coord[i] = attrib.texcoords[attrib.faces[3*f+2].vt_idx*2+i];} vt_count+=1;
-		for(int i=1; i<4; i++)  vertices[vt_count-i].tex_coord[1]= 1.f - vertices[vt_count-i].tex_coord[1];
-	}}
-	//for(unsigned int i = 0; i<shapes[0].length; i++) printf("%u ",indices[i]);
-	//printf("HELLO%u\n",indices[10]);
-	
-	// TODO: almost works but after a sec lags real bad and freezes
-	//static int v_count = 0;
-	//static int vt_count = 0;
-	//for(unsigned int f=0; f<attrib.num_face_num_verts; f++) {
-	//	indices[3*f+0] = (uint32_t)(f*3+0);
-  //  indices[3*f+1] = (uint32_t)(f*3+1);
-  //  indices[3*f+2] = (uint32_t)(f*3+2);
-
-	//	tinyobj_vertex_index_t ind0 = attrib.faces[3*f+0];
-	//  tinyobj_vertex_index_t ind1 = attrib.faces[3*f+1];
-	//	tinyobj_vertex_index_t ind2 = attrib.faces[3*f+2];
-
-	//	for(int vi=0; vi<3; vi++) { vertices[v_count].pos[vi] = (float)attrib.vertices[ind0.v_idx*3 + vi]; } v_count+=1;
-	//	for(int vi=0; vi<3; vi++) { vertices[v_count].pos[vi] = (float)attrib.vertices[ind1.v_idx*3 + vi]; } v_count+=1;
-	//	for(int vi=0; vi<3; vi++) { vertices[v_count].pos[vi] = (float)attrib.vertices[ind2.v_idx*3 + vi]; } v_count+=1;
-
-	//	vertices[vt_count].tex_coord[0] =       attrib.texcoords[ind0.vt_idx*2 + 0];
-	//  vertices[vt_count].tex_coord[1] = 1.f - attrib.texcoords[ind0.vt_idx*2 + 1]; vt_count += 1;
-	//	vertices[vt_count].tex_coord[0] =       attrib.texcoords[ind1.vt_idx*2 + 0];
-	//	vertices[vt_count].tex_coord[1] = 1.f - attrib.texcoords[ind1.vt_idx*2 + 1]; vt_count += 1;
-	//	vertices[vt_count].tex_coord[0] =       attrib.texcoords[ind2.vt_idx*2 + 0];
-	//	vertices[vt_count].tex_coord[1] = 1.f - attrib.texcoords[ind2.vt_idx*2 + 1]; vt_count += 1;
-	//}
-
-	tinyobj_attrib_free(&attrib);
-	tinyobj_shapes_free(shapes,n_shapes);
-	tinyobj_materials_free(materials,n_materials);
-}
-
 
 void createVertexBuffer() {
-	VkDeviceSize buffer_size = sizeof(Vertex) * n_vertices;
+	VkDeviceSize buffer_size = sizeof(vertices[0]) * n_vertices;
 	VkBuffer staging_buffer;
 	VkDeviceMemory staging_buffer_memory;
 	createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer, &staging_buffer_memory);
@@ -1259,7 +1050,7 @@ void createVertexBuffer() {
 }
 
 void createIndexBuffer() {
-	VkDeviceSize buffer_size = sizeof(uint32_t) * n_indices;
+	VkDeviceSize buffer_size = sizeof(indices[0]) * n_indices;
 	VkBuffer staging_buffer;
 	VkDeviceMemory staging_buffer_memory;
 	createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer, &staging_buffer_memory);
@@ -1332,7 +1123,7 @@ void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
 	VkBuffer vertex_buffers[] = {vertex_buffer};
 	VkDeviceSize offsets[] = {0};
 	vkCmdBindVertexBuffers(command_buffers[current_frame], 0,1, vertex_buffers, offsets);
-	vkCmdBindIndexBuffer(command_buffers[current_frame], index_buffer, 0, VK_INDEX_TYPE_UINT32);
+	vkCmdBindIndexBuffer(command_buffers[current_frame], index_buffer, 0, VK_INDEX_TYPE_UINT16);
 
 	// We specified viewport and scissor to be dynamic so we set them here.
 	VkViewport viewport = (VkViewport){
@@ -1353,7 +1144,7 @@ void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
 	vkCmdBindDescriptorSets(command_buffers[current_frame], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0,1, &descriptor_sets[current_frame], 0,NULL);
 	vkCmdDrawIndexed(command_buffers[current_frame], (uint32_t)n_indices, 1,0,0,0); // args: cb, vertexCount, instanceCount, firstVertex (lowest val of gl_VertexIndex), firstInstance
 
-  ImGui_ImplVulkan_RenderDrawData(igGetDrawData(), command_buffers[current_frame], VK_NULL_HANDLE); // ???
+	ImGui_ImplVulkan_RenderDrawData(igGetDrawData(), command_buffers[current_frame], VK_NULL_HANDLE);
 
 	vkCmdEndRenderPass(command_buffers[current_frame]);
 	if(vkEndCommandBuffer(command_buffers[current_frame]) != VK_SUCCESS) printf("Failed to record command buffer! :(");
@@ -1511,12 +1302,13 @@ void initImgui() {
 		{ VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000 }
 	};
 
-	VkDescriptorPoolCreateInfo pool_info = {};
-	pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-	pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-	pool_info.maxSets = 1000;
-	pool_info.poolSizeCount = 11;
-	pool_info.pPoolSizes = pool_sizes;
+	VkDescriptorPoolCreateInfo pool_info = (VkDescriptorPoolCreateInfo){
+	  .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+	  .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+	  .maxSets = 1000,
+	  .poolSizeCount = 11,
+	  .pPoolSizes = pool_sizes
+  };
 
 	if(vkCreateDescriptorPool(dev, &pool_info, NULL, &imgui_descriptor_pool) != VK_SUCCESS) printf("Failed to create ImGUI descriptor pool! :(");
 
@@ -1532,15 +1324,16 @@ void initImgui() {
   ImFontAtlas_AddFontFromFileTTF(ioptr->Fonts, "./lib/Px437_IBM_BIOS.ttf", 8.0f, 0, 0); // Cool font :)
 
 	//this initializes imgui for Vulkan
-	ImGui_ImplVulkan_InitInfo init_info = {};
-	init_info.Instance = instance;
-	init_info.PhysicalDevice = physical_dev;
-	init_info.Device = dev;
-	init_info.Queue = graphics_queue;
-	init_info.DescriptorPool = imgui_descriptor_pool;
-	init_info.MinImageCount = 3;
-	init_info.ImageCount = 3;
-	init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+	ImGui_ImplVulkan_InitInfo init_info = (ImGui_ImplVulkan_InitInfo){
+	  .Instance = instance,
+	  .PhysicalDevice = physical_dev,
+	  .Device = dev,
+	  .Queue = graphics_queue,
+	  .DescriptorPool = imgui_descriptor_pool,
+	  .MinImageCount = 3,
+	  .ImageCount = 3,
+	  .MSAASamples = VK_SAMPLE_COUNT_1_BIT
+  };
 
 	ImGui_ImplVulkan_Init(&init_info, render_pass); // TODO make new render pass for imgui?
 
@@ -1571,10 +1364,6 @@ void initVulkan() {
 	createCommandPool();
 	createDepthResources();
 	createFramebuffers();
-	createTextureImage();
-	createTextureImageView();
-	createTextureSampler();
-	loadModel();
 	createVertexBuffer();
 	createIndexBuffer();
 	createUniformBuffers();
@@ -1585,15 +1374,11 @@ void initVulkan() {
 }
 
 
-
 void mainLoop() {
 	while(!glfwWindowShouldClose(window)) {
 		glfwPollEvents();
 
-    ImGui_ImplVulkan_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
-    igNewFrame();
-
+    ImGui_ImplVulkan_NewFrame(); ImGui_ImplGlfw_NewFrame(); igNewFrame();
     imguiFrame();
 
 		drawFrame();
@@ -1603,11 +1388,6 @@ void mainLoop() {
 
 void cleanup() {
 	cleanupSwapchain();
-
-	vkDestroySampler(dev,texture_sampler,NULL);
-	vkDestroyImageView(dev,texture_image_view,NULL);
-	vkDestroyImage(dev,texture_image,NULL);
-	vkFreeMemory(dev,texture_image_memory,NULL);
 
 	for(size_t i=0; i<MAX_FRAMES_IN_FLIGHT; i++) {
 		vkDestroyBuffer(dev,uniform_buffers[i],NULL);

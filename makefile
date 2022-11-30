@@ -1,7 +1,7 @@
 CC=gcc
 
 IDIR=inc
-_DEPS = kvec.h cimgui.h cimgui_impl.h stb_image.h tinyobj_loader_c.h
+_DEPS = kvec.h cimgui.h cimgui_impl.h stb_image.h
 DEPS=$(patsubst %,$(IDIR)/%,$(_DEPS))
 
 ODIR=obj
