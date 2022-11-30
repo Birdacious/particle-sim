@@ -10,8 +10,6 @@
 #include <string.h>
 #include <time.h>
 // #include <shaderc/shaderc.h>
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
 #define CIMGUI_USE_GLFW
 #define CIMGUI_USE_VULKAN
@@ -68,8 +66,6 @@ VkFence *in_flight_fences;
 bool framebuffer_resized = false;
 VkBuffer vertex_buffer;
 VkDeviceMemory vertex_buffer_memory;
-VkBuffer index_buffer;
-VkDeviceMemory index_buffer_memory;
 VkBuffer *uniform_buffers;
 VkDeviceMemory *uniform_buffers_memory;
 VkImage depth_image;
@@ -84,22 +80,11 @@ typedef struct {
 	vec2 tex_coord;
 } Vertex;
 
-#define n_vertices 8 
+#define n_vertices 3
 const Vertex vertices[n_vertices] = {
 	{{-.5f,-.5f, .0f}, {1.f,0.f,0.f}, {1.f,0.f}},
 	{{ .5f,-.5f, .0f}, {0.f,1.f,0.f}, {0.f,0.f}},
-	{{ .5f, .5f, .0f}, {1.f,1.f,0.f}, {0.f,1.f}},
-	{{-.5f, .5f, .0f}, {0.f,0.f,1.f}, {1.f,1.f}},
-	
-	{{-.5f,-.5f,-.5f}, {1.f,0.f,0.f}, {1.f,0.f}},
-	{{ .5f,-.5f,-.5f}, {0.f,1.f,0.f}, {0.f,0.f}},
-	{{ .5f, .5f,-.5f}, {1.f,1.f,0.f}, {0.f,1.f}},
-	{{-.5f, .5f,-.5f}, {0.f,0.f,1.f}, {1.f,1.f}}
-};
-#define n_indices 12
-const uint16_t indices[n_indices] = {
-	0,1,2,2,3,0,
-	4,5,6,6,7,4
+	{{ .5f, .5f, .0f}, {1.f,1.f,0.f}, {0.f,1.f}}
 };
 
 //Vertex *vertices; unsigned int n_vertices;
@@ -1049,26 +1034,6 @@ void createVertexBuffer() {
 	vkFreeMemory(dev, staging_buffer_memory, NULL);
 }
 
-void createIndexBuffer() {
-	VkDeviceSize buffer_size = sizeof(indices[0]) * n_indices;
-	VkBuffer staging_buffer;
-	VkDeviceMemory staging_buffer_memory;
-	createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer, &staging_buffer_memory);
-
-	void* data;
-	vkMapMemory(dev, staging_buffer_memory, 0, buffer_size, 0, &data);
-	// s/t s/t tutorial says s/t about flushing memory explicitly vs ..._COHERENT_BIT, idk
-	memcpy(data, indices, (size_t)buffer_size);
-	vkUnmapMemory(dev, staging_buffer_memory);
-
-	createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &index_buffer, &index_buffer_memory);
-
-	copyBuffer(staging_buffer, index_buffer, buffer_size, command_pool);
-
-	vkDestroyBuffer(dev, staging_buffer, NULL);
-	vkFreeMemory(dev, staging_buffer_memory, NULL);
-}
-
 void createUniformBuffers() {
 	// We need multiple uniform buffers b/c w/ multiple frames in flight we don't want to update one uniform buffer in prep of next frame while the prev frame is still reading from it!
 	// We don't do all that staging buffer stuff here b/c we're changing this pretty much e/ frame so it would actually probably add more overhead than it's worth.
@@ -1123,7 +1088,6 @@ void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
 	VkBuffer vertex_buffers[] = {vertex_buffer};
 	VkDeviceSize offsets[] = {0};
 	vkCmdBindVertexBuffers(command_buffers[current_frame], 0,1, vertex_buffers, offsets);
-	vkCmdBindIndexBuffer(command_buffers[current_frame], index_buffer, 0, VK_INDEX_TYPE_UINT16);
 
 	// We specified viewport and scissor to be dynamic so we set them here.
 	VkViewport viewport = (VkViewport){
@@ -1142,7 +1106,7 @@ void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
 	vkCmdSetScissor(command_buffers[current_frame], 0, 1, &scissor);
 
 	vkCmdBindDescriptorSets(command_buffers[current_frame], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0,1, &descriptor_sets[current_frame], 0,NULL);
-	vkCmdDrawIndexed(command_buffers[current_frame], (uint32_t)n_indices, 1,0,0,0); // args: cb, vertexCount, instanceCount, firstVertex (lowest val of gl_VertexIndex), firstInstance
+	vkCmdDraw(command_buffers[current_frame], n_vertices, 1,0,0); // args: cb, vertexCount, instanceCount, firstVertex (lowest val of gl_VertexIndex), firstInstance
 
 	ImGui_ImplVulkan_RenderDrawData(igGetDrawData(), command_buffers[current_frame], VK_NULL_HANDLE);
 
@@ -1365,7 +1329,6 @@ void initVulkan() {
 	createDepthResources();
 	createFramebuffers();
 	createVertexBuffer();
-	createIndexBuffer();
 	createUniformBuffers();
 	createDescriptorPool();
 	createDescriptorSets();
@@ -1400,8 +1363,6 @@ void cleanup() {
 
   vkDestroyDescriptorPool(dev,imgui_descriptor_pool,NULL);
 
-	vkDestroyBuffer(dev,index_buffer,NULL);
-	vkFreeMemory(dev,index_buffer_memory,NULL);
 	vkDestroyBuffer(dev,vertex_buffer,NULL);
 	vkFreeMemory(dev,vertex_buffer_memory,NULL);
 
