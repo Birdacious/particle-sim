@@ -70,17 +70,13 @@ VkDeviceMemory *uniform_buffers_memory;
 
 VkDescriptorPool imgui_descriptor_pool;
 
-typedef struct {
-	vec3 pos;
-	vec3 color;
-	vec2 tex_coord;
-} Vertex;
-
-#define n_vertices 3
+typedef struct { vec2 pos; vec3 color; } Vertex;
+#define n_vertices 4 
 const Vertex vertices[n_vertices] = {
-	{{-.5f,-.5f, .0f}, {1.f,0.f,0.f}, {1.f,0.f}},
-	{{ .5f,-.5f, .0f}, {0.f,1.f,0.f}, {0.f,0.f}},
-	{{ .5f, .5f, .0f}, {1.f,1.f,0.f}, {0.f,1.f}}
+	{{-.5f,-.5f}, {1.f,0.f,0.f}},
+	{{ .5f,-.5f}, {0.f,1.f,0.f}},
+	{{ .5f, .5f}, {1.f,1.f,0.f}},
+	{{-.5f, .5f}, {0.f,0.f,1.f}}
 };
 
 //Vertex *vertices; unsigned int n_vertices;
@@ -102,13 +98,13 @@ VkVertexInputBindingDescription *getBindingDescription() {
 	};
 	return binding_desc;
 }
-const int n_attr_descs = 3;
+const int n_attr_descs = 2;
 VkVertexInputAttributeDescription *getAttributeDescriptions() {
 	VkVertexInputAttributeDescription *attr_descs = malloc(n_attr_descs*sizeof(VkVertexInputAttributeDescription));
 	attr_descs[0] = (VkVertexInputAttributeDescription){
 		.binding = 0,
 		.location = 0,
-		.format = VK_FORMAT_R32G32B32_SFLOAT, // uses color format names. This really means vec3. Others: R32/R32G32/R32G32B32/R32G32B32A32 basically mean float/vec2/vec3/vec4. And _SINT/_UINT/_SFLOAT == ivec#/uvec#/dvec# (the _SFLOAT one is 64 bit unlike the others, takes up 2 "slots" per vec item).
+		.format = VK_FORMAT_R32G32_SFLOAT, // uses color format names. This really means vec3. Others: R32/R32G32/R32G32B32/R32G32B32A32 basically mean float/vec2/vec3/vec4. And _SINT/_UINT/_SFLOAT == ivec#/uvec#/dvec# (the _SFLOAT one is 64 bit unlike the others, takes up 2 "slots" per vec item).
 		.offset = offsetof(Vertex,pos)
 	};
 	attr_descs[1] = (VkVertexInputAttributeDescription){
@@ -116,12 +112,6 @@ VkVertexInputAttributeDescription *getAttributeDescriptions() {
 		.location = 1,
 		.format = VK_FORMAT_R32G32B32_SFLOAT,
 		.offset = offsetof(Vertex,color)
-	};
-	attr_descs[2] = (VkVertexInputAttributeDescription){
-		.binding = 0,
-		.location = 2,
-		.format = VK_FORMAT_R32G32_SFLOAT,
-		.offset = offsetof(Vertex,tex_coord)
 	};
 	return attr_descs;
 }
@@ -645,7 +635,7 @@ void createGraphicsPipeline() {
 	};
 	VkPipelineInputAssemblyStateCreateInfo input_asm_create_info = (VkPipelineInputAssemblyStateCreateInfo){
 		.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-		.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, // plenty of ways to optimize vertices w/ different options here
+		.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST, // plenty of ways to optimize vertices w/ different options here
 		.primitiveRestartEnable = VK_FALSE
 	};
 //	VkViewport viewport = (VkViewport){
