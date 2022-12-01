@@ -964,7 +964,6 @@ void createVertexBuffer() {
 	vkDestroyBuffer(dev, staging_buffer, NULL);
 	vkFreeMemory(dev, staging_buffer_memory, NULL);
 }
-
 void createUniformBuffers() {
 	// We need multiple uniform buffers b/c w/ multiple frames in flight we don't want to update one uniform buffer in prep of next frame while the prev frame is still reading from it!
 	// We don't do all that staging buffer stuff here b/c we're changing this pretty much e/ frame so it would actually probably add more overhead than it's worth.
@@ -1270,9 +1269,12 @@ void initImgui() {
 	//clear font textures from cpu data
 	ImGui_ImplVulkan_DestroyFontUploadObjects();
 }
-void imguiFrame() {
-  bool b = true;
-  igShowDemoWindow(&b);
+void imguiFrame(float dt) {
+  bool my_bool = true;
+  float spacing = igGetStyle()->ItemInnerSpacing.x;
+  igBegin("Hello, world!", &my_bool, 0);
+  igText("FPS: %.1f | TPS: %.1f", igGetIO()->Framerate, fminf(1.f/dt, igGetIO()->Framerate));
+  igEnd();
 }
 
 
@@ -1340,19 +1342,18 @@ void ParticleGroupInteraction(int i_gr1, size_t len_gr1, int i_gr2, size_t len_g
 }
 
 
-
-
 void mainLoop() {
   float dt = 0.01f; // Fixed timestep
   float t = 0; // How old the PHYSICS SIMULATION is
+  float t_running = 0; // How long the APPLCIATION has been running
   struct timespec ts_app_start;   timespec_get(&ts_app_start,TIME_UTC);
 	while(!glfwWindowShouldClose(window)) {
     struct timespec ts_current;   timespec_get(&ts_current,  TIME_UTC);
-    float t_running = 0; // How long the APPLCIATION has been running
-    t_running += (ts_current.tv_sec-ts_app_start.tv_sec) + ((ts_current.tv_nsec-ts_app_start.tv_nsec)/1000000000.0);
+    t_running = (ts_current.tv_sec-ts_app_start.tv_sec) + ((ts_current.tv_nsec-ts_app_start.tv_nsec)/1000000000.0);
     printf("%f\r",t_running-t);
 
-    if(t_running-t > dt) { // Fixed timestep. Only step forward if it's been >=dt since last step. If it has, step the sim forward by exactly dt. No dependency on framerate.
+    // Fixed timestep. Physics do not depend on FPS.
+    if(t_running-t > dt) {
       t+=dt;
       // ParticleGroupInteraction(0, 50, 0, 50, 0.001f,dt);
       ParticleGroupInteraction(50,80, 50,80, -0.001,dt);
@@ -1365,7 +1366,7 @@ void mainLoop() {
 		glfwPollEvents();
 
     ImGui_ImplVulkan_NewFrame(); ImGui_ImplGlfw_NewFrame(); igNewFrame(); // Functions you just gotta call before new imgui frame
-    imguiFrame(); // Function with the GUI description actually in it
+    imguiFrame(dt);
 
 		drawFrame();
 	}
