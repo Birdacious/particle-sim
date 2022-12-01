@@ -15,6 +15,7 @@
 #define CIMGUI_USE_VULKAN
 #include "cimgui.h"
 #include "cimgui_impl.h"
+#include "kvec.h"
 
 // define "DEBUG" during compilation to use validation layers
 // TODO: There's an extra part in the tut about Message Callbacks but idc rn
@@ -71,16 +72,8 @@ VkDeviceMemory *uniform_buffers_memory;
 VkDescriptorPool imgui_descriptor_pool;
 
 typedef struct { vec2 pos; vec3 color; } Vertex;
-#define n_vertices 4 
-const Vertex vertices[n_vertices] = {
-	{{-.5f,-.5f}, {1.f,0.f,0.f}},
-	{{ .5f,-.5f}, {0.f,1.f,0.f}},
-	{{ .5f, .5f}, {1.f,1.f,0.f}},
-	{{-.5f, .5f}, {0.f,0.f,1.f}}
-};
-
-//Vertex *vertices; unsigned int n_vertices;
-//uint32_t *indices; unsigned int n_indices;
+unsigned int n_vertices = 0;
+Vertex *vertices;
 
 typedef struct {
 	vec2 aligning_test;
@@ -534,7 +527,6 @@ void createDescriptorSetLayout() {
 	};
 	if(vkCreateDescriptorSetLayout(dev, &layout_info, NULL, &descriptor_set_layout) != VK_SUCCESS) {printf("Failed to create descriptor set layout!"); exit(1);}
 }
-
 void createDescriptorPool() {
 	VkDescriptorPoolSize uni_pool_size = (VkDescriptorPoolSize){
 		.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -549,7 +541,6 @@ void createDescriptorPool() {
 	};
 	if(vkCreateDescriptorPool(dev, &pool_info, NULL, &descriptor_pool) != VK_SUCCESS) {printf("Failed to create descriptor pool! :("); exit(1);}
 }
-
 void createDescriptorSets() {
 	VkDescriptorSetLayout *layouts = malloc(sizeof(VkDescriptorSetLayout) * MAX_FRAMES_IN_FLIGHT);
 	for(size_t i=0; i<(uint32_t)MAX_FRAMES_IN_FLIGHT; i++) {
@@ -1127,6 +1118,23 @@ void updateUniformBuffer(uint32_t current_image) {
 	memcpy(data, &ubo, sizeof(ubo));
 	vkUnmapMemory(dev, uniform_buffers_memory[current_image]);
 }
+void updateVertexBuffer(VkCommandPool cmd_pool) {
+  // tbh, since updating vertex buf e/ frame, staging buffer probably worse for performance; should <> but w/e
+	VkDeviceSize buffer_size = sizeof(vertices[0]) * n_vertices;
+	VkBuffer staging_buffer;
+	VkDeviceMemory staging_buffer_memory;
+	createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer, &staging_buffer_memory);
+
+	void* data;
+	vkMapMemory(dev, staging_buffer_memory, 0, buffer_size, 0, &data);
+	memcpy(data, vertices, (size_t)buffer_size);
+	vkUnmapMemory(dev, staging_buffer_memory);
+
+	copyBuffer(staging_buffer, vertex_buffer, buffer_size, cmd_pool);
+
+	vkDestroyBuffer(dev, staging_buffer, NULL);
+	vkFreeMemory(dev, staging_buffer_memory, NULL);
+}
 
 void drawFrame() {
   igGetIO();
@@ -1144,6 +1152,7 @@ void drawFrame() {
 	recordCommandBuffer(command_buffers[current_frame],image_index);
 
 	updateUniformBuffer(current_frame);
+  updateVertexBuffer(command_pool);
 
 	VkSemaphore wait_semaphores[] = {image_available_semaphores[current_frame]};
 	VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
@@ -1178,6 +1187,26 @@ void drawFrame() {
 	// TODO later: resizing window quickly causes validation layers message about imageExtent = (,) slightly out of bounds of min/maxImageExtent = (,). See comment in "Swap Chain Recreation" section for possible fixes, it's quite far down. The GTX1660 guy's solution doesn't work for me, prolly need to do s/t on glfw side like just wait while user is resizing window, as Alexander suggests.
 
 	current_frame = (current_frame+1) % MAX_FRAMES_IN_FLIGHT;
+}
+
+void initVulkan() {
+	createInstance();
+	createSurface();
+	pickPhysicalDevice();
+	createLogicalDevice();
+	createSwapchain();
+	createImageViews();
+	createRenderPass();
+	createDescriptorSetLayout();
+	createGraphicsPipeline();
+	createCommandPool();
+	createFramebuffers();
+	createVertexBuffer();
+	createUniformBuffers();
+	createDescriptorPool();
+	createDescriptorSets();
+	createCommandBuffers();
+	createSyncObjects();
 }
 
 
@@ -1247,33 +1276,96 @@ void imguiFrame() {
 }
 
 
-void initVulkan() {
-	createInstance();
-	createSurface();
-	pickPhysicalDevice();
-	createLogicalDevice();
-	createSwapchain();
-	createImageViews();
-	createRenderPass();
-	createDescriptorSetLayout();
-	createGraphicsPipeline();
-	createCommandPool();
-	createFramebuffers();
-	createVertexBuffer();
-	createUniformBuffers();
-	createDescriptorPool();
-	createDescriptorSets();
-	createCommandBuffers();
-	createSyncObjects();
+// PARTICLE SIM STUFF
+typedef struct { float x,y,vx,vy; vec3 color; } Particle;
+kvec_t(Particle) particles;
+
+void createParticleGroup(int n, vec3 color) {
+	Particle gr[n];
+	for(int i=0; i<n; i++) {
+		gr[i].x = (rand()/(float)RAND_MAX)*2-1;
+		gr[i].y = (rand()/(float)RAND_MAX)*2-1;
+    gr[i].vx = gr[i].vy = 0.f;
+		glm_vec3_copy(color, gr[i].color);
+
+		kv_push(Particle, particles, gr[i]);
+	}
+}
+void updateParticleVertices() {
+  for(int i=0; i<kv_size(particles); i++) {
+    vertices[i].pos[0] = kv_A(particles,i).x;
+    vertices[i].pos[1] = kv_A(particles,i).y;
+    glm_vec3_copy(kv_A(particles,i).color, vertices[i].color);
+  }
+}
+void ParticleGroupInteraction(int i_gr1, size_t len_gr1, int i_gr2, size_t len_gr2, float g, float dt) {
+	Particle *gr1 = &kv_A(particles,i_gr1);
+  Particle *gr2 = &kv_A(particles,i_gr2);
+
+  for(int i=0; i<len_gr1; i++) { float fx=0; float fy = 0;
+	for(int j=0; j<len_gr2; j++) {
+		Particle a = gr1[i];
+    Particle b = gr2[j];
+    float dx = a.x-b.x;
+    float dy = a.y-b.y;
+    float d = sqrtf(dx*dx+dy*dy);
+    if(d > 0 && d<0.2f) {
+      float F = g/d;
+      fx += F*dx;
+      fy += F*dy;
+    }
+    a.vx += fx;
+    a.vy += fy;
+
+    // Incorrect, should be normalized. Then can simplify out the sqrt too b/c normalizing is just dv by magnitude or s/t
+    // Well actually apparently the guy found easier interesting patterns w/o squareing.
+    // let dx = other.x - this.x
+    // let dy = other.y - this.y
+    // let distsq = (dx*dx + dy*dy)
+    // if(distsq <= 0) return
+    // let f = rule * GRAVITY / distsq
+    // this.vx += f * dx
+    // this.vy += f * dy
+
+    if(a.x < -1) a.vx = fabsf(a.vx)     ;
+    if(a.x >  1) a.vx = fabsf(a.vx) * -1; 
+    if(a.y < -1) a.vy = fabsf(a.vy)     ;
+    if(a.y >  1) a.vy = fabsf(a.vy) * -1;
+
+    a.x += a.vx*dt*0.001f;
+    a.y += a.vy*dt*0.001f;
+
+    gr1[i] = a;
+	}}
 }
 
 
+
+
 void mainLoop() {
+  float dt = 0.01f; // Fixed timestep
+  float t = 0; // How old the PHYSICS SIMULATION is
+  struct timespec ts_app_start;   timespec_get(&ts_app_start,TIME_UTC);
 	while(!glfwWindowShouldClose(window)) {
+    struct timespec ts_current;   timespec_get(&ts_current,  TIME_UTC);
+    float t_running = 0; // How long the APPLCIATION has been running
+    t_running += (ts_current.tv_sec-ts_app_start.tv_sec) + ((ts_current.tv_nsec-ts_app_start.tv_nsec)/1000000000.0);
+    printf("%f\r",t_running-t);
+
+    if(t_running-t > dt) { // Fixed timestep. Only step forward if it's been >=dt since last step. If it has, step the sim forward by exactly dt. No dependency on framerate.
+      t+=dt;
+      // ParticleGroupInteraction(0, 50, 0, 50, 0.001f,dt);
+      ParticleGroupInteraction(50,80, 50,80, -0.001,dt);
+      ParticleGroupInteraction(0, 50, 50,80,  0.0001,dt);
+      ParticleGroupInteraction(50,80, 0, 50, -0.00001,dt);
+
+      updateParticleVertices();
+    }
+  
 		glfwPollEvents();
 
-    ImGui_ImplVulkan_NewFrame(); ImGui_ImplGlfw_NewFrame(); igNewFrame();
-    imguiFrame();
+    ImGui_ImplVulkan_NewFrame(); ImGui_ImplGlfw_NewFrame(); igNewFrame(); // Functions you just gotta call before new imgui frame
+    imguiFrame(); // Function with the GUI description actually in it
 
 		drawFrame();
 	}
@@ -1320,10 +1412,21 @@ void cleanup() {
 }
 
 void run() {
+  srand(0);
+  kv_init(particles);
+  createParticleGroup(50, (vec3){1.f,1.f,0.f});
+  createParticleGroup(80, (vec3){1.f,0.f,0.f});
+
+  n_vertices = kv_size(particles);
+  printf("%d\n",n_vertices);
+  vertices = malloc(sizeof(Vertex)*n_vertices);
+
 	initWindow();
 	initVulkan();
   initImgui();
+
 	mainLoop();
+
 	cleanup();
 }
 
