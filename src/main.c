@@ -118,7 +118,7 @@ void initWindow() {
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	//glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-	window = glfwCreateWindow(WIDTH,HEIGHT,"Vulkan", NULL,NULL);
+	window = glfwCreateWindow(WIDTH,HEIGHT,"Particle Life Simulation", NULL,NULL);
 	// don't need glfwSetWindowUserPointer(window,this) b/c bool framebuffer_resized is already in this file and globally accessible.
 	    // The use of this function is so that you can access some things you might need from fn callbacks, w/o having to make those things totally global.
 	glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
@@ -131,7 +131,7 @@ void createInstance() {
 
 	VkApplicationInfo app_info = (VkApplicationInfo){
 	.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-	.pApplicationName = "Hello Triangle",
+	.pApplicationName = "Particle Life Simulation",
 	.applicationVersion = VK_MAKE_VERSION(1,0,0),
 	.pEngineName = "No Engine",
 	.engineVersion = VK_MAKE_VERSION(1,0,0),
@@ -185,24 +185,6 @@ void findQueueFamilies(VkPhysicalDevice phys_dev, QueueFamilyIndices* inds) {
 	}
 }
 
-#define n_req_extensions 1
-const char* req_device_extensions[n_req_extensions] = {
-	VK_KHR_SWAPCHAIN_EXTENSION_NAME
-};
-bool checkDeviceExtensionSupport(VkPhysicalDevice phys_dev) {
-	uint32_t extension_count;
-	vkEnumerateDeviceExtensionProperties(phys_dev, NULL, &extension_count, NULL);
-	VkExtensionProperties available_extensions[extension_count];
-	vkEnumerateDeviceExtensionProperties(phys_dev, NULL, &extension_count, available_extensions);
-
-	for(  uint32_t i=0; i<n_req_extensions ; i++) { bool extension_found=false;
-		for(uint32_t j=0; j<extension_count; j++) {
-			if(strcmp(req_device_extensions[i], available_extensions[j].extensionName) == 0) {
-				extension_found=true; break;} }
-		if(!extension_found) return false; }
-	return true;
-}
-
 typedef struct {
 	VkSurfaceCapabilitiesKHR capabilities;
 	VkSurfaceFormatKHR* formats;           uint32_t n_format;
@@ -227,36 +209,6 @@ SwapchainSupportDetails querySwapchainSupport(VkPhysicalDevice phys_dev) {
 
 	return details;
 }
-
-bool isDeviceSuitable(VkPhysicalDevice phys_dev) {
-	// There's plenty you could do here to select the device you want, but idc.
-	//VkPhysicalDeviceProperties dev_properties;
-	VkPhysicalDeviceFeatures   supported_features; 
-	//vkGetPhysicalDeviceProperties(phys_dev, &dev_properties);
-	vkGetPhysicalDeviceFeatures  (phys_dev, &supported_features);
-
-	QueueFamilyIndices inds; findQueueFamilies(phys_dev, &inds);
-
-	bool supports_extensions = checkDeviceExtensionSupport(phys_dev);
-
-	bool swapchain_adequate = false;
-	if(supports_extensions) {
-		SwapchainSupportDetails swapchain_support = querySwapchainSupport(phys_dev);
-		swapchain_adequate = swapchain_support.n_format>0 && swapchain_support.n_presentMode>0;
-		free(swapchain_support.formats); free(swapchain_support.presentModes); // FREE'D swapchain_support
-	}
-	
-	printf("%u, %u, %u\n", inds.graphicsFamily, inds.presentFamily, UINT32_MAX);
-	puts(inds.graphicsFamily == UINT32_MAX ? "no g" : "yes g");
-	puts(inds.presentFamily  == UINT32_MAX ? "no p" : "yes p");
-	puts(inds.presentFamily != UINT32_MAX && inds.graphicsFamily != UINT32_MAX ? "yay" : "nay");
-	return (inds.graphicsFamily != UINT32_MAX &&
-			    inds.presentFamily != UINT32_MAX &&
-					supports_extensions &&
-					swapchain_adequate &&
-					supported_features.samplerAnisotropy);
-}
-
 VkSurfaceFormatKHR chooseSwapSurfaceFormat(const VkSurfaceFormatKHR available_formats[], uint32_t n_formats) {
 	for(uint32_t i=0; i<n_formats; i++) {
 		if(available_formats[i].format     == VK_FORMAT_B8G8R8A8_SRGB &&
@@ -265,7 +217,6 @@ VkSurfaceFormatKHR chooseSwapSurfaceFormat(const VkSurfaceFormatKHR available_fo
 	}
 	return available_formats[0]; // If ideal B8G8R8A8 SRGB format not found, just w/e first one please.
 }
-
 VkPresentModeKHR chooseSwapPresentMode(const VkPresentModeKHR available_presentModes[], uint32_t n_presentModes) {
 	for(uint32_t i=0; i<n_presentModes; i++) {
 		if(available_presentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR) return available_presentModes[i];
@@ -273,7 +224,6 @@ VkPresentModeKHR chooseSwapPresentMode(const VkPresentModeKHR available_presentM
 	return VK_PRESENT_MODE_FIFO_KHR;
 	// See tut for more info about the 4 different present modes and which one for which situation! It's cool.
 }
-
 VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR capabilities) {
 	if(capabilities.currentExtent.width != UINT32_MAX) {
 		return capabilities.currentExtent;
@@ -295,62 +245,6 @@ VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR capabilities) {
 		return actual_extent;
 	}
 }
-
-void pickPhysicalDevice() {
-	uint32_t n_phys_dev=0;
-	vkEnumeratePhysicalDevices(instance, &n_phys_dev, NULL);
-	if(n_phys_dev==0) {printf("No Vulkan-compatible GPUs! :(");}
-	VkPhysicalDevice phys_devs[n_phys_dev];
-	vkEnumeratePhysicalDevices(instance, &n_phys_dev, phys_devs);
-	printf("%u = ndev\n",n_phys_dev);
-
-	for(uint32_t i=0; i<n_phys_dev; i++) {
-		VkPhysicalDevice phys_dev = phys_devs[i];
-		if(isDeviceSuitable(phys_dev)) {physical_dev = phys_dev; break;}
-		if(physical_dev == VK_NULL_HANDLE) {printf("No suitable GPUs! :(");}
-	}
-}
-
-void createLogicalDevice() {
-	QueueFamilyIndices inds; findQueueFamilies(physical_dev, &inds);
-
-	VkDeviceQueueCreateInfo queue_create_infos[1];
-
-	float queuePriority = 1.0f;
-	queue_create_infos[0] = (VkDeviceQueueCreateInfo){
-		.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-		.queueFamilyIndex = inds.graphicsFamily,
-		.queueCount = 1,
-		.pQueuePriorities = &queuePriority
-	};
-	//queue_create_infos[1] = queue_create_infos[0];
-	//queue_create_infos[1].queueFamilyIndex = inds.presentFamily;
-
-	VkPhysicalDeviceFeatures device_features = (VkPhysicalDeviceFeatures){.samplerAnisotropy=VK_TRUE};
-	// Possible addition: if anisotropy not available, conditionally set sampler_info.anisoTropyEnable = VK_FALSE and .maxAnisotropy = 1.f (in createTextureSampler) if not available
-
-	VkDeviceCreateInfo create_info = (VkDeviceCreateInfo){
-		.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-		.queueCreateInfoCount = 1,
-		.pQueueCreateInfos = queue_create_infos,
-		.pEnabledFeatures = &device_features,
-		.enabledExtensionCount = n_req_extensions,
-		.ppEnabledExtensionNames = req_device_extensions
-	};
-	#ifdef DEBUG
-	create_info.enabledLayerCount = n_req_val_lyrs; // Vulkan no longer makes distinction between instance and dev-specific validation layers, but for back-comp we include this anyway
-	create_info.ppEnabledLayerNames = req_validation_layers; // ^
-	#endif
-
-	if(vkCreateDevice(physical_dev, &create_info, NULL, &dev)) printf("Failed to create logical device! :(");
-	vkGetDeviceQueue(dev, inds.graphicsFamily, 0, &graphics_queue);
-	// vkGetDeviceQueue(dev, inds.presentFamily , 0, &present_queue );
-	present_queue = graphics_queue;
-	// TODO: NOTE: I am doing s/t lazy and wrong here, where I commented out a bunch of stuff out of laziness and just assumed the graphics queue is the same as the present queue.
-	  // And on my computer they ARE the same (graphicsFamily & presentFamily both == index 0), but it is NOT ALWAYS! So to be fully correct you'll need to come back and fix this.
-		// In the tutorial they used a C++ set (I don't have in plain C) to deal w/ this elegantly but I'm lazy so I skipped it.
-}
-
 void createSwapchain() {
 	SwapchainSupportDetails swapchainSupport = querySwapchainSupport(physical_dev);
 	VkSurfaceFormatKHR surface_format = chooseSwapSurfaceFormat(swapchainSupport.formats, swapchainSupport.n_format);
@@ -397,6 +291,105 @@ void createSwapchain() {
 
 	swapchain_image_format = surface_format.format;
 	swapchain_extent = extent;
+}
+
+#define n_req_extensions 1
+const char* req_device_extensions[n_req_extensions] = {
+	VK_KHR_SWAPCHAIN_EXTENSION_NAME
+};
+bool checkDeviceExtensionSupport(VkPhysicalDevice phys_dev) {
+	uint32_t extension_count;
+	vkEnumerateDeviceExtensionProperties(phys_dev, NULL, &extension_count, NULL);
+	VkExtensionProperties available_extensions[extension_count];
+	vkEnumerateDeviceExtensionProperties(phys_dev, NULL, &extension_count, available_extensions);
+
+	for(  uint32_t i=0; i<n_req_extensions ; i++) { bool extension_found=false;
+		for(uint32_t j=0; j<extension_count; j++) {
+			if(strcmp(req_device_extensions[i], available_extensions[j].extensionName) == 0) {
+				extension_found=true; break;} }
+		if(!extension_found) return false; }
+	return true;
+}
+bool isDeviceSuitable(VkPhysicalDevice phys_dev) {
+	// There's plenty you could do here to select the device you want, but idc.
+	//VkPhysicalDeviceProperties dev_properties;
+	VkPhysicalDeviceFeatures   supported_features; 
+	//vkGetPhysicalDeviceProperties(phys_dev, &dev_properties);
+	vkGetPhysicalDeviceFeatures  (phys_dev, &supported_features);
+
+	QueueFamilyIndices inds; findQueueFamilies(phys_dev, &inds);
+
+	bool supports_extensions = checkDeviceExtensionSupport(phys_dev);
+
+	bool swapchain_adequate = false;
+	if(supports_extensions) {
+		SwapchainSupportDetails swapchain_support = querySwapchainSupport(phys_dev);
+		swapchain_adequate = swapchain_support.n_format>0 && swapchain_support.n_presentMode>0;
+		free(swapchain_support.formats); free(swapchain_support.presentModes); // FREE'D swapchain_support
+	}
+	
+	printf("%u, %u, %u\n", inds.graphicsFamily, inds.presentFamily, UINT32_MAX);
+	puts(inds.graphicsFamily == UINT32_MAX ? "no g" : "yes g");
+	puts(inds.presentFamily  == UINT32_MAX ? "no p" : "yes p");
+	puts(inds.presentFamily != UINT32_MAX && inds.graphicsFamily != UINT32_MAX ? "yay" : "nay");
+	return (inds.graphicsFamily != UINT32_MAX &&
+			    inds.presentFamily != UINT32_MAX &&
+					supports_extensions &&
+					swapchain_adequate &&
+					supported_features.samplerAnisotropy);
+}
+void pickPhysicalDevice() {
+	uint32_t n_phys_dev=0;
+	vkEnumeratePhysicalDevices(instance, &n_phys_dev, NULL);
+	if(n_phys_dev==0) {printf("No Vulkan-compatible GPUs! :(");}
+	VkPhysicalDevice phys_devs[n_phys_dev];
+	vkEnumeratePhysicalDevices(instance, &n_phys_dev, phys_devs);
+	printf("%u = ndev\n",n_phys_dev);
+
+	for(uint32_t i=0; i<n_phys_dev; i++) {
+		VkPhysicalDevice phys_dev = phys_devs[i];
+		if(isDeviceSuitable(phys_dev)) {physical_dev = phys_dev; break;}
+		if(physical_dev == VK_NULL_HANDLE) {printf("No suitable GPUs! :(");}
+	}
+}
+void createLogicalDevice() {
+	QueueFamilyIndices inds; findQueueFamilies(physical_dev, &inds);
+
+	VkDeviceQueueCreateInfo queue_create_infos[1];
+
+	float queuePriority = 1.0f;
+	queue_create_infos[0] = (VkDeviceQueueCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+		.queueFamilyIndex = inds.graphicsFamily,
+		.queueCount = 1,
+		.pQueuePriorities = &queuePriority
+	};
+	//queue_create_infos[1] = queue_create_infos[0];
+	//queue_create_infos[1].queueFamilyIndex = inds.presentFamily;
+
+	VkPhysicalDeviceFeatures device_features = (VkPhysicalDeviceFeatures){.samplerAnisotropy=VK_TRUE};
+	// Possible addition: if anisotropy not available, conditionally set sampler_info.anisoTropyEnable = VK_FALSE and .maxAnisotropy = 1.f (in createTextureSampler) if not available
+
+	VkDeviceCreateInfo create_info = (VkDeviceCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+		.queueCreateInfoCount = 1,
+		.pQueueCreateInfos = queue_create_infos,
+		.pEnabledFeatures = &device_features,
+		.enabledExtensionCount = n_req_extensions,
+		.ppEnabledExtensionNames = req_device_extensions
+	};
+	#ifdef DEBUG
+	create_info.enabledLayerCount = n_req_val_lyrs; // Vulkan no longer makes distinction between instance and dev-specific validation layers, but for back-comp we include this anyway
+	create_info.ppEnabledLayerNames = req_validation_layers; // ^
+	#endif
+
+	if(vkCreateDevice(physical_dev, &create_info, NULL, &dev)) printf("Failed to create logical device! :(");
+	vkGetDeviceQueue(dev, inds.graphicsFamily, 0, &graphics_queue);
+	// vkGetDeviceQueue(dev, inds.presentFamily , 0, &present_queue );
+	present_queue = graphics_queue;
+	// TODO: NOTE: I am doing s/t lazy and wrong here, where I commented out a bunch of stuff out of laziness and just assumed the graphics queue is the same as the present queue.
+	  // And on my computer they ARE the same (graphicsFamily & presentFamily both == index 0), but it is NOT ALWAYS! So to be fully correct you'll need to come back and fix this.
+		// In the tutorial they used a C++ set (I don't have in plain C) to deal w/ this elegantly but I'm lazy so I skipped it.
 }
 
 VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspect_flags) {
@@ -451,7 +444,6 @@ VkShaderModule createShaderModule(const char* shdr_code, unsigned long code_sz) 
 	if(vkCreateShaderModule(dev, &create_info, NULL, &shdr_module)) printf("Failed 2 create shader module");
 	return shdr_module;
 }
-
 
 VkFormat findSupportedFormat(const VkFormat *candidate_formats, uint32_t n_candidates, VkImageTiling tiling, VkFormatFeatureFlags features) {
 	for(uint32_t i=0; i<n_candidates; i++) {
@@ -509,7 +501,6 @@ void createRenderPass() {
 	};
 	if(vkCreateRenderPass(dev, &render_pass_create_info, NULL, &render_pass) != VK_SUCCESS) printf("Failed to create render pass! :(");
 }
-
 
 void createDescriptorSetLayout() {
 	VkDescriptorSetLayoutBinding ubo_layout_binding = (VkDescriptorSetLayoutBinding){
@@ -579,7 +570,6 @@ void createDescriptorSets() {
 		vkUpdateDescriptorSets(dev, 1, descriptor_writes, 0, NULL);
 	}
 }
-
 
 VkDynamicState dynamic_states[] = {
 	VK_DYNAMIC_STATE_VIEWPORT,
@@ -747,7 +737,6 @@ void createGraphicsPipeline() {
 	free(binding_desc); free(attr_descs);
 }
 
-
 void createFramebuffers() {
 	swapchain_framebuffers = malloc(sizeof(VkFramebuffer) * n_image);
 	
@@ -776,7 +765,6 @@ void createCommandPool() {
 	};
 	if(vkCreateCommandPool(dev, &pool_info, NULL, &command_pool) != VK_SUCCESS) printf("Failed to create command pool! :(");
 }
-
 
 uint32_t findMemoryType(uint32_t type_filter, VkMemoryPropertyFlags properties) {
 	VkPhysicalDeviceMemoryProperties mem_properties; // Contains 2 arrays: memoryTypes, memoryHeaps
@@ -808,7 +796,6 @@ void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyF
 
 	vkBindBufferMemory(dev, *buffer, *buffer_memory, 0);
 }
-
 // Simple way of submitting commands. To make sure things happen synchronously, just waits for queue to be idle (QueueWaitIdle).
   // However, for better performance, you could/should combine operations into a single cmd buffer and execute them asynchronously for better throughput.
     // (In the case of image texture stuff, especially the transitions and copy in createTextureImage() ).
@@ -843,7 +830,6 @@ void endSingleTimeCommands(VkCommandBuffer cb, VkCommandPool cmd_pool) {
 
 	vkFreeCommandBuffers(dev, cmd_pool, 1, &cb);
 }
-
 void copyBuffer(VkBuffer src_buf, VkBuffer dst_buf, VkDeviceSize size, VkCommandPool cmd_pool) {
 	VkCommandBuffer tmp_cmd_buf = beginSingleTimeCommands(cmd_pool);
 
@@ -857,62 +843,6 @@ void copyBuffer(VkBuffer src_buf, VkBuffer dst_buf, VkDeviceSize size, VkCommand
 	endSingleTimeCommands(tmp_cmd_buf, cmd_pool);
 }
 
-void copyBufferToImage(VkBuffer buf, VkImage image, uint32_t w, uint32_t h) {
-	VkCommandBuffer cb = beginSingleTimeCommands(command_pool);
-
-	VkBufferImageCopy region = (VkBufferImageCopy){
-		.bufferOffset = 0,
-		.bufferRowLength = 0, // this and ImageHeight being 0 means pixels are simply tightly packed, no padding
-		.bufferImageHeight = 0,
-		.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-		.imageSubresource.mipLevel = 0,
-		.imageSubresource.baseArrayLayer = 0,
-		.imageSubresource.layerCount = 1,
-		.imageOffset = {0,0,0},
-		.imageExtent = {w,h,1}
-	};
-	vkCmdCopyBufferToImage(cb, buf, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region); // also possible to have an ~array~ of VkBufferImageCopy
-
-	endSingleTimeCommands(cb, command_pool);
-}
-// NOTE: there exists VK_IMAGE_LAYOUT_GENERAL, which supports all operations! At the cost of some performance ofc.
-void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout old_layout, VkImageLayout new_layout) {
-	VkCommandBuffer cb = beginSingleTimeCommands(command_pool);
-
-	// Barrier, typically used to make sure thing done being wrote to b4 reading. VkBufferMemoryBarrier for buffers too.
-	// But can also used to transition layouts.
-	VkImageMemoryBarrier barrier = (VkImageMemoryBarrier){
-		.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-		.oldLayout = old_layout, // VK_IMAGE_LAYOUT_UNDEFINED if you don't care about existing contents of image
-		.newLayout = new_layout,
-		.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, // used to transfer queue family ownership, but we're not doing that here
-		.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-		.image = image,
-		.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-		.subresourceRange.baseMipLevel = 0,
-		.subresourceRange.levelCount = 1,
-		.subresourceRange.baseArrayLayer = 0,
-		.subresourceRange.layerCount = 1,
-		.srcAccessMask = 0, // todo just below
-		.dstAccessMask = 0  // todo just below
-	};
-	VkPipelineStageFlags src_stage, dst_stage;
-	if(old_layout == VK_IMAGE_LAYOUT_UNDEFINED && new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-		barrier.srcAccessMask = 0; // don't have to wait on anything
-		barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-		src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT; // earliest possible pipeline stage, don't have to wait on anything
-		dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT; // pseudo-stage where transfers happen
-	} else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-		barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-		barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-		src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-		dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-	} else {printf("Unsupported image layout transition! :("); exit(1);}
-
-	vkCmdPipelineBarrier(cb, src_stage,dst_stage, 0,0,NULL,0,NULL,1,&barrier);
-
-	endSingleTimeCommands(cb, command_pool);
-}
 void createImage(uint32_t w, uint32_t h, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage *image, VkDeviceMemory *image_memory) {
 	VkImageCreateInfo image_info = (VkImageCreateInfo){
 		.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
@@ -944,7 +874,6 @@ void createImage(uint32_t w, uint32_t h, VkFormat format, VkImageTiling tiling, 
 	vkBindImageMemory(dev, *image, *image_memory, 0);
 }
 
-
 void createVertexBuffer() {
 	VkDeviceSize buffer_size = sizeof(vertices[0]) * n_vertices;
 	VkBuffer staging_buffer;
@@ -975,7 +904,6 @@ void createUniformBuffers() {
 	// No vkMapMemory here, we'll do that thru a separate fn b/c we want more control
 };
 
-
 void createCommandBuffers() {
 	command_buffers = malloc(sizeof(VkCommandBuffer) * MAX_FRAMES_IN_FLIGHT);
 
@@ -987,7 +915,6 @@ void createCommandBuffers() {
 	};
 	if(vkAllocateCommandBuffers(dev, &alloc_info, command_buffers) != VK_SUCCESS) printf("Failed to allocate command buffers! :(");
 }
-
 void recordCommandBuffer(VkCommandBuffer cb, uint32_t image_ind) {
 	VkCommandBufferBeginInfo begin_info = (VkCommandBufferBeginInfo) {
 		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -1064,7 +991,6 @@ void createSyncObjects() {
 	}
 }
 
-
 void cleanupSwapchain() {
 	for(uint32_t i=0; i<n_image; i++) {
 		vkDestroyFramebuffer(dev,swapchain_framebuffers[i],NULL);
@@ -1077,7 +1003,6 @@ void cleanupSwapchain() {
 
 	vkDestroySwapchainKHR(dev,swapchain,NULL);
 }
-
 void recreateSwapchain() {
 	int w=0; int h=0;
 	//glfwGetFramebufferSize(window, &w,&h);
@@ -1094,7 +1019,6 @@ void recreateSwapchain() {
 	createFramebuffers();
 	// Could recreate renderpass too. Swapchain image format could change during prog's life, e.g. maybe useful if dragging a window to another monitor.
 }
-
 
 void updateUniformBuffer(uint32_t current_image) {
 	static struct timespec ts_app_start = (struct timespec){.tv_sec=0};
@@ -1118,21 +1042,12 @@ void updateUniformBuffer(uint32_t current_image) {
 	vkUnmapMemory(dev, uniform_buffers_memory[current_image]);
 }
 void updateVertexBuffer(VkCommandPool cmd_pool) {
-  // tbh, since updating vertex buf e/ frame, staging buffer probably worse for performance; should <> but w/e
+  // No staging buffer b/c doing this e/ frame, so all that staging business would probably be slower.
 	VkDeviceSize buffer_size = sizeof(vertices[0]) * n_vertices;
-	VkBuffer staging_buffer;
-	VkDeviceMemory staging_buffer_memory;
-	createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer, &staging_buffer_memory);
-
-	void* data;
-	vkMapMemory(dev, staging_buffer_memory, 0, buffer_size, 0, &data);
-	memcpy(data, vertices, (size_t)buffer_size);
-	vkUnmapMemory(dev, staging_buffer_memory);
-
-	copyBuffer(staging_buffer, vertex_buffer, buffer_size, cmd_pool);
-
-	vkDestroyBuffer(dev, staging_buffer, NULL);
-	vkFreeMemory(dev, staging_buffer_memory, NULL);
+  void* data;
+  vkMapMemory(dev, vertex_buffer_memory, 0, buffer_size, 0, &data);
+  memcpy(data, vertices, (size_t)buffer_size);
+  vkUnmapMemory(dev, vertex_buffer_memory);
 }
 
 void drawFrame() {
@@ -1209,6 +1124,84 @@ void initVulkan() {
 }
 
 
+// ACTUAL PARTICLE SIM STUFF
+typedef struct { float x,y,vx,vy; vec3 color; } Particle;
+kvec_t(Particle) particles;
+
+int seed = 0;
+bool paused = false;
+
+void createParticleGroup(int n, vec3 color) {
+	Particle gr[n];
+	for(int i=0; i<n; i++) {
+		gr[i].x = (rand()/(float)RAND_MAX)*2-1;
+		gr[i].y = (rand()/(float)RAND_MAX)*2-1;
+    gr[i].vx = gr[i].vy = 0.f;
+		glm_vec3_copy(color, gr[i].color);
+
+		kv_push(Particle, particles, gr[i]);
+	}
+}
+void updateParticleVertices() {
+  for(int i=0; i<kv_size(particles); i++) {
+    vertices[i].pos[0] = kv_A(particles,i).x;
+    vertices[i].pos[1] = kv_A(particles,i).y;
+    glm_vec3_copy(kv_A(particles,i).color, vertices[i].color);
+  }
+}
+void ParticleGroupInteraction(int i_gr1, size_t len_gr1, int i_gr2, size_t len_gr2, float g, float dt) {
+	Particle *gr1 = &kv_A(particles,i_gr1);
+  Particle *gr2 = &kv_A(particles,i_gr2);
+
+  for(int i=0; i<len_gr1; i++) { float fx=0; float fy = 0;
+	for(int j=0; j<len_gr2; j++) {
+		Particle a = gr1[i];
+    Particle b = gr2[j];
+    float dx = a.x-b.x;
+    float dy = a.y-b.y;
+    float d = sqrtf(dx*dx+dy*dy);
+    if(d > 0 && d<0.2f) {
+      float F = g/d;
+      fx += F*dx;
+      fy += F*dy;
+    }
+    a.vx += fx;
+    a.vy += fy;
+
+    // Incorrect, should be normalized. Then can simplify out the sqrt too b/c normalizing is just dv by magnitude or s/t
+    // Well actually apparently the guy found easier interesting patterns w/o squareing.
+    // let dx = other.x - this.x
+    // let dy = other.y - this.y
+    // let distsq = (dx*dx + dy*dy)
+    // if(distsq <= 0) return
+    // let f = rule * GRAVITY / distsq
+    // this.vx += f * dx
+    // this.vy += f * dy
+
+    if(a.x < -1) a.vx = fabsf(a.vx)     ;
+    if(a.x >  1) a.vx = fabsf(a.vx) * -1; 
+    if(a.y < -1) a.vy = fabsf(a.vy)     ;
+    if(a.y >  1) a.vy = fabsf(a.vy) * -1;
+
+    a.x += a.vx*dt*0.001f;
+    a.y += a.vy*dt*0.001f;
+
+    gr1[i] = a;
+	}}
+}
+void reinitPositions(int seed) {
+  srand(seed);
+  for(int i=0; i<kv_size(particles); i++) {
+		kv_A(particles,i).x = (rand()/(float)RAND_MAX)*2-1;
+		kv_A(particles,i).y = (rand()/(float)RAND_MAX)*2-1;
+    kv_A(particles,i).vx = kv_A(particles,i).vy = 0.f;
+	}
+}
+void capturePositionData(char *filename) { // TODO
+  
+}
+
+
 // IMGUI STUFF
 void initImgui() {
 	// ImGUI descriptor pool
@@ -1269,96 +1262,40 @@ void initImgui() {
 	//clear font textures from cpu data
 	ImGui_ImplVulkan_DestroyFontUploadObjects();
 }
-void imguiFrame(float dt) {
+void imguiFrame(float dt, float t_running) {
   bool my_bool = true;
-  float spacing = igGetStyle()->ItemInnerSpacing.x;
-  igBegin("Hello, world!", &my_bool, 0);
-  igText("FPS: %.1f | TPS: %.1f", igGetIO()->Framerate, fminf(1.f/dt, igGetIO()->Framerate));
+  igSetNextWindowPos((ImVec2){0.f,0.f}, 0, (ImVec2){0.f,0.f}); igSetNextWindowSize((ImVec2){300.f, 200.f}, 0);
+  igBegin("Controls!", &my_bool, 0);
+  if(igButton("Pause", (ImVec2){60.f,14.f})) {paused = !paused;}
+  igText("Runtime: %.0f | TPS: %.0f | FPS: %.0f", t_running, fminf(1.f/dt, igGetIO()->Framerate), igGetIO()->Framerate);
+  if(igButton("Reinit", (ImVec2){60.f,14.f})) {reinitPositions(seed);} igSameLine(60.f,20.f); igDragInt("##", &seed, .1f, 0, UINT32_MAX, "seed: %d", 0);
+
   igEnd();
 }
 
 
-// PARTICLE SIM STUFF
-typedef struct { float x,y,vx,vy; vec3 color; } Particle;
-kvec_t(Particle) particles;
-
-void createParticleGroup(int n, vec3 color) {
-	Particle gr[n];
-	for(int i=0; i<n; i++) {
-		gr[i].x = (rand()/(float)RAND_MAX)*2-1;
-		gr[i].y = (rand()/(float)RAND_MAX)*2-1;
-    gr[i].vx = gr[i].vy = 0.f;
-		glm_vec3_copy(color, gr[i].color);
-
-		kv_push(Particle, particles, gr[i]);
-	}
-}
-void updateParticleVertices() {
-  for(int i=0; i<kv_size(particles); i++) {
-    vertices[i].pos[0] = kv_A(particles,i).x;
-    vertices[i].pos[1] = kv_A(particles,i).y;
-    glm_vec3_copy(kv_A(particles,i).color, vertices[i].color);
-  }
-}
-void ParticleGroupInteraction(int i_gr1, size_t len_gr1, int i_gr2, size_t len_gr2, float g, float dt) {
-	Particle *gr1 = &kv_A(particles,i_gr1);
-  Particle *gr2 = &kv_A(particles,i_gr2);
-
-  for(int i=0; i<len_gr1; i++) { float fx=0; float fy = 0;
-	for(int j=0; j<len_gr2; j++) {
-		Particle a = gr1[i];
-    Particle b = gr2[j];
-    float dx = a.x-b.x;
-    float dy = a.y-b.y;
-    float d = sqrtf(dx*dx+dy*dy);
-    if(d > 0 && d<0.2f) {
-      float F = g/d;
-      fx += F*dx;
-      fy += F*dy;
-    }
-    a.vx += fx;
-    a.vy += fy;
-
-    // Incorrect, should be normalized. Then can simplify out the sqrt too b/c normalizing is just dv by magnitude or s/t
-    // Well actually apparently the guy found easier interesting patterns w/o squareing.
-    // let dx = other.x - this.x
-    // let dy = other.y - this.y
-    // let distsq = (dx*dx + dy*dy)
-    // if(distsq <= 0) return
-    // let f = rule * GRAVITY / distsq
-    // this.vx += f * dx
-    // this.vy += f * dy
-
-    if(a.x < -1) a.vx = fabsf(a.vx)     ;
-    if(a.x >  1) a.vx = fabsf(a.vx) * -1; 
-    if(a.y < -1) a.vy = fabsf(a.vy)     ;
-    if(a.y >  1) a.vy = fabsf(a.vy) * -1;
-
-    a.x += a.vx*dt*0.001f;
-    a.y += a.vy*dt*0.001f;
-
-    gr1[i] = a;
-	}}
-}
 
 
 void mainLoop() {
   float dt = 0.01f; // Fixed timestep
   float t = 0; // How old the PHYSICS SIMULATION is
   float t_running = 0; // How long the APPLCIATION has been running
-  struct timespec ts_app_start;   timespec_get(&ts_app_start,TIME_UTC);
+  struct timespec ts_app_start; timespec_get(&ts_app_start,TIME_UTC);
 	while(!glfwWindowShouldClose(window)) {
-    struct timespec ts_current;   timespec_get(&ts_current,  TIME_UTC);
-    t_running = (ts_current.tv_sec-ts_app_start.tv_sec) + ((ts_current.tv_nsec-ts_app_start.tv_nsec)/1000000000.0);
+    struct timespec ts_current; timespec_get(&ts_current,  TIME_UTC);
+    t_running = (ts_current.tv_sec-ts_app_start.tv_sec) + ((ts_current.tv_nsec-ts_app_start.tv_nsec)/1e9);
     printf("%f\r",t_running-t);
 
     // Fixed timestep. Physics do not depend on FPS.
     if(t_running-t > dt) {
       t+=dt;
-      // ParticleGroupInteraction(0, 50, 0, 50, 0.001f,dt);
-      ParticleGroupInteraction(50,80, 50,80, -0.001,dt);
-      ParticleGroupInteraction(0, 50, 50,80,  0.0001,dt);
-      ParticleGroupInteraction(50,80, 0, 50, -0.00001,dt);
+
+      if(!paused) {
+        // ParticleGroupInteraction(0, 50, 0, 50, 0.001f,dt);
+        ParticleGroupInteraction(50,80, 50,80, -0.001,dt);
+        ParticleGroupInteraction(0, 50, 50,80,  0.0001,dt);
+        ParticleGroupInteraction(50,80, 0, 50, -0.00001,dt);
+      }
 
       updateParticleVertices();
     }
@@ -1366,7 +1303,7 @@ void mainLoop() {
 		glfwPollEvents();
 
     ImGui_ImplVulkan_NewFrame(); ImGui_ImplGlfw_NewFrame(); igNewFrame(); // Functions you just gotta call before new imgui frame
-    imguiFrame(dt);
+    imguiFrame(dt, t_running);
 
 		drawFrame();
 	}
