@@ -329,9 +329,6 @@ bool isDeviceSuitable(VkPhysicalDevice phys_dev) {
 	}
 	
 	printf("%u, %u, %u\n", inds.graphicsFamily, inds.presentFamily, UINT32_MAX);
-	puts(inds.graphicsFamily == UINT32_MAX ? "no g" : "yes g");
-	puts(inds.presentFamily  == UINT32_MAX ? "no p" : "yes p");
-	puts(inds.presentFamily != UINT32_MAX && inds.graphicsFamily != UINT32_MAX ? "yay" : "nay");
 	return (inds.graphicsFamily != UINT32_MAX &&
 			    inds.presentFamily != UINT32_MAX &&
 					supports_extensions &&
@@ -886,7 +883,8 @@ void createVertexBuffer() {
 	memcpy(data, vertices, (size_t)buffer_size);
 	vkUnmapMemory(dev, staging_buffer_memory);
 
-	createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vertex_buffer, &vertex_buffer_memory);
+	// createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vertex_buffer, &vertex_buffer_memory);
+  createBuffer(buffer_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &vertex_buffer, &vertex_buffer_memory);
 
 	copyBuffer(staging_buffer, vertex_buffer, buffer_size, command_pool);
 
@@ -1126,37 +1124,50 @@ void initVulkan() {
 
 // ACTUAL PARTICLE SIM STUFF
 typedef struct { float x,y,vx,vy; vec3 color; } Particle;
-kvec_t(Particle) particles;
+// kvec_t(Particle) particles;
+Particle particles[400];
+typedef struct {
+  struct GridCell *nw,*ne,*sw,*se;
+  float center_x,center_y,w,h;
+  unsigned int n_particles; kvec_t(unsigned int) particle_inds;
+} GridCell;
+GridCell grid;
 
 int seed = 0;
 bool paused = false;
+unsigned int grid_depth = 1;
 
-void createParticleGroup(int n, vec3 color) {
-	Particle gr[n];
-	for(int i=0; i<n; i++) {
-		gr[i].x = (rand()/(float)RAND_MAX)*2-1;
-		gr[i].y = (rand()/(float)RAND_MAX)*2-1;
-    gr[i].vx = gr[i].vy = 0.f;
-		glm_vec3_copy(color, gr[i].color);
-
-		kv_push(Particle, particles, gr[i]);
+void createParticleGroup(int start, int n, vec3 color) {
+	Particle p;
+	// for(int i=0; i<n; i++) {
+  for(int i=start; i<n+start; i++) {
+		p.x = (rand()/(float)RAND_MAX)*2-1;
+		p.y = (rand()/(float)RAND_MAX)*2-1;
+    p.vx = p.vy = 0.f;
+		glm_vec3_copy(color, p.color);
+    particles[i] = p;
+		// kv_push(Particle, particles, p);
 	}
 }
 void updateParticleVertices() {
-  for(int i=0; i<kv_size(particles); i++) {
-    vertices[i].pos[0] = kv_A(particles,i).x;
-    vertices[i].pos[1] = kv_A(particles,i).y;
-    glm_vec3_copy(kv_A(particles,i).color, vertices[i].color);
+  // for(int i=0; i<kv_size(particles); i++) {
+  //   vertices[i].pos[0] = kv_A(particles,i).x;
+  //   vertices[i].pos[1] = kv_A(particles,i).y;
+  //   glm_vec3_copy(kv_A(particles,i).color, vertices[i].color);
+  for(int i=0; i<400; i++) {
+    vertices[i].pos[0] = particles[i].x;
+    vertices[i].pos[1] = particles[i].y;
+    glm_vec3_copy(particles[i].color, vertices[i].color);
   }
 }
 void ParticleGroupInteraction(int i_gr1, size_t len_gr1, int i_gr2, size_t len_gr2, float g, float dt) {
-	Particle *gr1 = &kv_A(particles,i_gr1);
-  Particle *gr2 = &kv_A(particles,i_gr2);
+	// Particle *gr1 = &kv_A(particles,i_gr1);
+  // Particle *gr2 = &kv_A(particles,i_gr2);
 
-  for(int i=0; i<len_gr1; i++) { float fx=0; float fy = 0;
-	for(int j=0; j<len_gr2; j++) {
-		Particle a = gr1[i];
-    Particle b = gr2[j];
+  for(int i=i_gr1; i<i_gr1+len_gr1; i++) { float fx=0; float fy = 0;
+	for(int j=i_gr2; j<i_gr2+len_gr2; j++) {
+		Particle a = particles[i];
+    Particle b = particles[j];
     float dx = a.x-b.x;
     float dy = a.y-b.y;
     float d = sqrtf(dx*dx+dy*dy);
@@ -1186,19 +1197,26 @@ void ParticleGroupInteraction(int i_gr1, size_t len_gr1, int i_gr2, size_t len_g
     a.x += a.vx*dt*0.001f;
     a.y += a.vy*dt*0.001f;
 
-    gr1[i] = a;
+    particles[i] = a;
 	}}
 }
 void reinitPositions(int seed) {
   srand(seed);
-  for(int i=0; i<kv_size(particles); i++) {
-		kv_A(particles,i).x = (rand()/(float)RAND_MAX)*2-1;
-		kv_A(particles,i).y = (rand()/(float)RAND_MAX)*2-1;
-    kv_A(particles,i).vx = kv_A(particles,i).vy = 0.f;
+  // for(int i=0; i<kv_size(particles); i++) {
+  for(int i=0; i<400; i++) {
+		// kv_A(particles,i).x = (rand()/(float)RAND_MAX)*2-1;
+		// kv_A(particles,i).y = (rand()/(float)RAND_MAX)*2-1;
+    // kv_A(particles,i).vx = kv_A(particles,i).vy = 0.f;
+    particles[i].x = (rand()/(float)RAND_MAX)*2-1;
+    particles[i].y = (rand()/(float)RAND_MAX)*2-1;
+    particles[i].vx = particles[i].vy = 0.f;
 	}
 }
 void capturePositionData(char *filename) { // TODO
   
+}
+void reconstructGrid() { // TODO
+  // Traverse total "particles". Based on the particles' positions put in appropriate grid cell.
 }
 
 
@@ -1262,39 +1280,45 @@ void initImgui() {
 	//clear font textures from cpu data
 	ImGui_ImplVulkan_DestroyFontUploadObjects();
 }
-void imguiFrame(float dt, float t_running) {
+void imguiFrame(float dt, float t_running, float *t, float *dropped_time) {
   bool my_bool = true;
   igSetNextWindowPos((ImVec2){0.f,0.f}, 0, (ImVec2){0.f,0.f}); igSetNextWindowSize((ImVec2){300.f, 200.f}, 0);
   igBegin("Controls!", &my_bool, 0);
+
   if(igButton("Pause", (ImVec2){60.f,14.f})) {paused = !paused;}
-  igText("Runtime: %.0f | TPS: %.0f | FPS: %.0f", t_running, fminf(1.f/dt, igGetIO()->Framerate), igGetIO()->Framerate);
-  if(igButton("Reinit", (ImVec2){60.f,14.f})) {reinitPositions(seed);} igSameLine(60.f,20.f); igDragInt("##", &seed, .1f, 0, UINT32_MAX, "seed: %d", 0);
+  igText("Running time: %03.0fs | FPS: %.0f", t_running, igGetIO()->Framerate);
+  igText("Physics time: %03.0fs | TPS: %.0f", *t, fminf(1.f/dt, igGetIO()->Framerate));
+  igText("Dropped physics time: %.3f", *dropped_time);
+  if(igButton("Reinit", (ImVec2){60.f,14.f})) { *dropped_time += *t; *t = 0; reinitPositions(seed);} igSameLine(60.f,20.f); igDragInt("##", &seed, .1f, 0, UINT32_MAX, "seed: %d", 0);
 
   igEnd();
 }
-
-
 
 
 void mainLoop() {
   float dt = 0.01f; // Fixed timestep
   float t = 0; // How old the PHYSICS SIMULATION is
   float t_running = 0; // How long the APPLCIATION has been running
+  float total_dropped_time = 0.f; float drop_phys_time = 0.f;
   struct timespec ts_app_start; timespec_get(&ts_app_start,TIME_UTC);
 	while(!glfwWindowShouldClose(window)) {
     struct timespec ts_current; timespec_get(&ts_current,  TIME_UTC);
     t_running = (ts_current.tv_sec-ts_app_start.tv_sec) + ((ts_current.tv_nsec-ts_app_start.tv_nsec)/1e9);
     printf("%f\r",t_running-t);
 
-    // Fixed timestep. Physics do not depend on FPS.
-    if(t_running-t > dt) {
-      t+=dt;
+    // Fixed timestep. Physics not harmed by FPS fluctuations.
+    // Can drop physics ticks. I.e. If paused or FPS dips, don't go superspeed to try to catch back up.
+    if(t_running-t-total_dropped_time > dt) {
+      drop_phys_time = t_running-t-total_dropped_time-dt;
+      drop_phys_time = drop_phys_time - fmodf(drop_phys_time,dt);
+      if(drop_phys_time > 0.f) {total_dropped_time += drop_phys_time;}
 
       if(!paused) {
+        t+=dt;
         // ParticleGroupInteraction(0, 50, 0, 50, 0.001f,dt);
-        ParticleGroupInteraction(50,80, 50,80, -0.001,dt);
-        ParticleGroupInteraction(0, 50, 50,80,  0.0001,dt);
-        ParticleGroupInteraction(50,80, 0, 50, -0.00001,dt);
+        ParticleGroupInteraction(200,200, 200,200,-0.0001f,dt);
+        ParticleGroupInteraction(0,  200, 200,200,   0.00001f,dt);
+        ParticleGroupInteraction(200,200, 0,  200,  -0.000001f,dt);
       }
 
       updateParticleVertices();
@@ -1303,7 +1327,7 @@ void mainLoop() {
 		glfwPollEvents();
 
     ImGui_ImplVulkan_NewFrame(); ImGui_ImplGlfw_NewFrame(); igNewFrame(); // Functions you just gotta call before new imgui frame
-    imguiFrame(dt, t_running);
+    imguiFrame(dt, t_running, &t, &total_dropped_time);
 
 		drawFrame();
 	}
@@ -1351,11 +1375,12 @@ void cleanup() {
 
 void run() {
   srand(0);
-  kv_init(particles);
-  createParticleGroup(50, (vec3){1.f,1.f,0.f});
-  createParticleGroup(80, (vec3){1.f,0.f,0.f});
+  // kv_init(particles);
+  createParticleGroup(0,200, (vec3){1.f,1.f,0.f});
+  createParticleGroup(200,200, (vec3){1.f,0.f,0.f});
 
-  n_vertices = kv_size(particles);
+  // n_vertices = kv_size(particles);
+  n_vertices = 400;
   printf("%d\n",n_vertices);
   vertices = malloc(sizeof(Vertex)*n_vertices);
 
