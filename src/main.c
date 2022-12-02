@@ -1125,17 +1125,37 @@ void initVulkan() {
 // ACTUAL PARTICLE SIM STUFF
 typedef struct { float x,y,vx,vy; vec3 color; } Particle;
 // kvec_t(Particle) particles;
-Particle particles[400];
+#define n_particles 800
+Particle particles[n_particles];
 typedef struct {
   struct GridCell *nw,*ne,*sw,*se;
   float center_x,center_y,w,h;
-  unsigned int n_particles; kvec_t(unsigned int) particle_inds;
+  unsigned int n_ps; kvec_t(unsigned int) particle_inds;
 } GridCell;
 GridCell grid;
 
 int seed = 0;
 bool paused = false;
 unsigned int grid_depth = 1;
+
+float forces[16] = {0};
+float r2r=0.f,
+      r2y=0.f,
+	  r2g=0.f,
+	  r2b=0.f,
+	  y2r=0.f,
+	  y2y=0.f,
+	  y2g=0.f,
+	  y2b=0.f,
+	  g2r=0.f,
+	  g2y=0.f,
+	  g2g=0.f,
+	  g2b=0.f;
+	  b2r=0.f,
+	  b2y=0.f,
+	  b2g=0.f,
+	  b2b=0.f;
+float b_fs[4] = {0.f,0.f,0.f,0.f};
 
 void createParticleGroup(int start, int n, vec3 color) {
 	Particle p;
@@ -1154,7 +1174,7 @@ void updateParticleVertices() {
   //   vertices[i].pos[0] = kv_A(particles,i).x;
   //   vertices[i].pos[1] = kv_A(particles,i).y;
   //   glm_vec3_copy(kv_A(particles,i).color, vertices[i].color);
-  for(int i=0; i<400; i++) {
+  for(int i=0; i<n_particles; i++) {
     vertices[i].pos[0] = particles[i].x;
     vertices[i].pos[1] = particles[i].y;
     glm_vec3_copy(particles[i].color, vertices[i].color);
@@ -1171,7 +1191,7 @@ void ParticleGroupInteraction(int i_gr1, size_t len_gr1, int i_gr2, size_t len_g
     float dx = a.x-b.x;
     float dy = a.y-b.y;
     float d = sqrtf(dx*dx+dy*dy);
-    if(d > 0 && d<0.2f) {
+    if(d > 0.f && d < .3f) {
       float F = g/d;
       fx += F*dx;
       fy += F*dy;
@@ -1291,12 +1311,20 @@ void imguiFrame(float dt, float t_running, float *t, float *dropped_time) {
   igText("Dropped physics time: %.3f", *dropped_time);
   if(igButton("Reinit", (ImVec2){60.f,14.f})) { *dropped_time += *t; *t = 0; reinitPositions(seed);} igSameLine(60.f,20.f); igDragInt("##", &seed, .1f, 0, UINT32_MAX, "seed: %d", 0);
 
+  // TODO: randomize forces button, followed by sliders for a bunch of forces
+  igText("\nCONTROL INTER-PARTICLE FORCES");
+  if(igButton("Randomize", (ImVec2){80.f,14.f})) { for(int i=0; i<16; i++) forces[i] = (rand()/(float)RAND_MAX)*.0002f - .0001f; }
+  igSliderFloat4("red", forces,      -.0001f, .0001f, "%.3f",0);
+  igSliderFloat4("yel", &forces[4],  -.0001f, .0001f, "%.3f",0);
+  igSliderFloat4("grn", &forces[8],  -.0001f, .0001f, "%.3f",0);
+  igSliderFloat4("blu", &forces[12], -.0001f, .0001f, "%.3f",0);
+
   igEnd();
 }
 
 
 void mainLoop() {
-  float dt = 0.01f; // Fixed timestep
+  float dt = 0.02f; // Fixed timestep
   float t = 0; // How old the PHYSICS SIMULATION is
   float t_running = 0; // How long the APPLCIATION has been running
   float total_dropped_time = 0.f; float drop_phys_time = 0.f;
@@ -1315,10 +1343,28 @@ void mainLoop() {
 
       if(!paused) {
         t+=dt;
-        // ParticleGroupInteraction(0, 50, 0, 50, 0.001f,dt);
-        ParticleGroupInteraction(200,200, 200,200,-0.0001f,dt);
-        ParticleGroupInteraction(0,  200, 200,200,   0.00001f,dt);
-        ParticleGroupInteraction(200,200, 0,  200,  -0.000001f,dt);
+
+        // TODO bad code
+        // (Well, ~especially~ bad code relative the rest of this)
+		ParticleGroupInteraction(  0,200,   0,200, forces[0],dt);
+		ParticleGroupInteraction(  0,200, 200,200, forces[1],dt);
+		ParticleGroupInteraction(  0,200, 400,200, forces[2],dt);
+		ParticleGroupInteraction(  0,200, 600,200, forces[3],dt);
+		ParticleGroupInteraction(200,200,   0,200, forces[4],dt);
+		ParticleGroupInteraction(200,200, 200,200, forces[5],dt);
+		ParticleGroupInteraction(200,200, 400,200, forces[6],dt);
+		ParticleGroupInteraction(200,200, 600,200, forces[7],dt);
+		ParticleGroupInteraction(400,200,   0,200, forces[8],dt);
+		ParticleGroupInteraction(400,200, 200,200, forces[9],dt);
+		ParticleGroupInteraction(400,200, 400,200, forces[10],dt);
+		ParticleGroupInteraction(400,200, 600,200, forces[11],dt);
+		ParticleGroupInteraction(600,200,   0,200, forces[12],dt);
+		ParticleGroupInteraction(600,200, 200,200, forces[13],dt);
+		ParticleGroupInteraction(600,200, 400,200, forces[14],dt);
+		ParticleGroupInteraction(600,200, 600,200, forces[15],dt);
+        // ParticleGroupInteraction(200,200, 200,200, -0.0001f,dt);
+        // ParticleGroupInteraction(0,  200, 200,200,  0.00001f,dt);
+        // ParticleGroupInteraction(200,200, 0,  200, -0.000001f,dt);
       }
 
       updateParticleVertices();
@@ -1376,11 +1422,13 @@ void cleanup() {
 void run() {
   srand(0);
   // kv_init(particles);
-  createParticleGroup(0,200, (vec3){1.f,1.f,0.f});
-  createParticleGroup(200,200, (vec3){1.f,0.f,0.f});
+  createParticleGroup(0,  200, (vec3){.5f,.5f,0.1f});
+  createParticleGroup(200,200, (vec3){.7f,0.f,0.f});
+  createParticleGroup(400,200, (vec3){.1f,.6f,0.f});
+  createParticleGroup(600,200, (vec3){.05f,.05f,.5f});
 
   // n_vertices = kv_size(particles);
-  n_vertices = 400;
+  n_vertices = n_particles;
   printf("%d\n",n_vertices);
   vertices = malloc(sizeof(Vertex)*n_vertices);
 
