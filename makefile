@@ -14,6 +14,8 @@ LIBS=-lglfw -lm -lvulkan -ldl -lpthread -lX11 -lXxf86vm -lXrandr -lXi -l:cimgui.
 CFLAGS=$(LDIRS) -I$(IDIR) -Wall
 ifeq ($(DEBUG), 1)
 	CFLAGS+=-g -O0 -DDEBUG
+else
+	CFLAGS+=-O3
 endif
 
 $(ODIR)/%.o: src/%.c $(DEPS)
