@@ -9,13 +9,13 @@ _OBJ = main.o
 OBJ=$(patsubst %,$(ODIR)/%,$(_OBJ))
 
 LDIRS=-Llib -Wl,-rpath=./lib/
-LIBS=-lglfw -lm -lvulkan -ldl -lpthread -lX11 -lXxf86vm -lXrandr -lXi -l:cimgui.so
+LIBS=-lglfw -lm -lvulkan -ldl -lpthread -lX11 -lXxf86vm -lXrandr -lXi -l:cimgui.so -lprofiler
 
 CFLAGS=$(LDIRS) -I$(IDIR) -Wall
 ifeq ($(DEBUG), 1)
 	CFLAGS+=-g -O0 -DDEBUG
 else
-	CFLAGS+=-O3
+	CFLAGS+=-g -O3
 endif
 
 $(ODIR)/%.o: src/%.c $(DEPS)

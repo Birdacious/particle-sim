@@ -17,6 +17,8 @@
 #include "cimgui_impl.h"
 #include "kvec.h"
 
+#include <gperftools/profiler.h>
+
 // define "DEBUG" during compilation to use validation layers
 // TODO: There's an extra part in the tut about Message Callbacks but idc rn
 #define n_req_val_lyrs 1
@@ -1133,7 +1135,7 @@ typedef struct {
 } GridCell;
 GridCell grid;
 
-int seed = 0;
+int seed = 41;
 bool paused = false;
 float max_interaction_dist = 20.f;
 
@@ -1169,18 +1171,16 @@ void ParticleGroupInteraction(int i_gr1, size_t len_gr1, int i_gr2, size_t len_g
       fx += F*dx;
       fy += F*dy;
     }
-    a.vx = (a.vx+fx)*0.5;
-    a.vy = (a.vy+fy)*0.5;
+    a.vx = (a.vx+fx)*.5f; // *.5 to add "drag"
+    a.vy = (a.vy+fy)*.5f;
 
-    // Incorrect, should be normalized. Then can simplify out the sqrt too b/c normalizing is just dv by magnitude or s/t
-    // Well actually apparently the guy found easier interesting patterns w/o squareing.
-    // let dx = other.x - this.x
-    // let dy = other.y - this.y
-    // let distsq = (dx*dx + dy*dy)
-    // if(distsq <= 0) return
-    // let f = rule * GRAVITY / distsq
-    // this.vx += f * dx
-    // this.vy += f * dy
+    /* Not physically correct (distance vec not normalized, and distance not squared). And in fact, d^2 would be computationally faster b/c can cancel some things out.
+       However, more interesting patterns with unsquared distance. D^2 seems to cause lots of attracting particles to just form "black holes" where particles continuously
+       get sucked towards a center until they get really close, then the force explodes when d^2 gets really small in g/d^2 and they shoot out a little ways to the other end,
+       only to get sucked back in again. Not very interesting.
+       Anyway, not doing collision detection, so the goal is not to be realistic anyways.
+       Particles are not meant to represent atoms nor bodies in space, the lack of collision detection and linear d makes it more like a cytoplasmic environment (roughly). 
+    */
 
     if(a.x <  0.f) a.vx = fabsf(a.vx)       ;
     if(a.x >100.f) a.vx = fabsf(a.vx) * -1.f; 
@@ -1271,12 +1271,12 @@ void initImgui() {
 }
 void imguiFrame(float dt, float t_running, float *t, float *dropped_time) {
   bool my_bool = true;
-  igSetNextWindowPos((ImVec2){0.f,0.f}, 0, (ImVec2){0.f,0.f}); igSetNextWindowSize((ImVec2){300.f, 200.f}, 0);
+  igSetNextWindowPos((ImVec2){0.f,0.f}, 0, (ImVec2){0.f,0.f}); igSetNextWindowSize((ImVec2){320.f, 240.f}, 0);
   igBegin("Controls!", &my_bool, 0);
 
   if(igButton("Pause", (ImVec2){60.f,14.f})) {paused = !paused;}
   igText("Running time: %03.0fs | FPS: %.0f", t_running, igGetIO()->Framerate);
-  igText("Physics time: %03.0fs | TPS: %.0f", *t, fminf(1.f/dt, igGetIO()->Framerate));
+  igText("Physics time: %03.0fs | TPS: %.0f/%.0f", *t, fminf(1.f/dt, igGetIO()->Framerate), 1/dt);
   igText("Dropped physics time: %.3f", *dropped_time);
   if(igButton("Reinit", (ImVec2){60.f,14.f})) { *dropped_time += *t; *t = 0; reinitPositions(seed);} igSameLine(60.f,20.f); igDragInt("##", &seed, .1f, 0, UINT32_MAX, "seed: %d", 0);
 
@@ -1387,6 +1387,7 @@ void cleanup() {
 }
 
 void run() {
+  ProfilerStart("out.prof");
   srand(0);
   createParticleGroup(0  ,200, (vec3){.7f,0.f,0.f});
   createParticleGroup(200,  200, (vec3){.5f,.5f,0.1f});
@@ -1404,6 +1405,7 @@ void run() {
 	mainLoop();
 
 	cleanup();
+  ProfilerStop();
 }
 
 int main() {
