@@ -1,5 +1,4 @@
 examples/
-obj/*
 out
 .vscode/
 out.prof
