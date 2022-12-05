@@ -1,3 +1,6 @@
+/* IMPORTANT: The first 1k lines or so are just boilerplate for the Vulkan renderer.
+   Skip to the end to get to the actual particle simulation code. */
+
 #define GLFW_INCLUDE_VULKAN
 //#define GLM_FORCE_RADIANS cglm radians by default
 #define CGLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -1129,12 +1132,13 @@ typedef struct { float x,y,vx,vy; vec3 color; } Particle;
 #define n_particles 800
 Particle particles[n_particles];
 Particle particles2[n_particles];
-// typedef struct {
-//   struct GridCell *nw,*ne,*sw,*se;
-//   float center_x,center_y,w,h;
-//   unsigned int n_ps; kvec_t(unsigned int) particle_inds;
-// } GridCell;
-// GridCell grid;
+typedef struct {
+  float corner_x,corner_y, w,h, center_x,center_y;
+  kvec_t(Particle*) ps; // Can just store pointers to particles instead of inds b/c main particles arrays are never reallocated.
+  float avg_force; // TODO
+} GridCell;
+#define n_gridcells 100
+GridCell grid[n_gridcells];
 
 // If a grid cell has a length of max_interact_distance then only need to check the surrounding 8. But that is for max_interact_dist.
 // The point of this report is to have ALL particles interact no matter distance
@@ -1240,13 +1244,30 @@ void reinitPositions(int seed) {
     particles[i].vx = particles[i].vy = particles2[i].vx = particles2[i].vy = 0.f;
 	}
   memcpy(particles2, particles, sizeof(Particle)*n_particles);
-  //particles2[10].x = 20.f;
 }
 void captureDistanceData(char *filename) { // TODO
   
 }
+void initGrid() {
+  // Note: canvas where the physics happen is 100x100 arbitrary units.
+  int a = sqrt(n_gridcells); if(a*a != n_gridcells) {printf("n_gridcells must be a square number!");}
+  for(int i=0; i<a; i++) {
+  for(int j=0; j<a; j++) {
+    grid[a*i+j].center_x = 100/a*j + a/2;
+    grid[a*i+j].center_y = 100/a*i + a/2;
+    grid[a*i+j].w = grid[a*i+j].h = 100/a;
+    kv_init(grid[a*i+j].ps);
+  }}
+}
 void reconstructGrid() { // TODO
   // Traverse total "particles". Based on the particles' positions put in appropriate grid cell.
+  int a = sqrt(n_gridcells);
+  for(int k=0; k<n_particles; k++) {
+    int i = particles2[k].x / a;
+    int j = particles2[k].y / a;
+    printf("%d%d   ",i,j);
+    //kv_push(Particle*, grid[i*a+j].ps, &particles2[k]); // TODO: segfualts, invalid write of 8
+  }
 }
 double calcAvgDistSq(Particle ps1[], Particle ps2[], int n) {
   double sum = 0.;
@@ -1318,10 +1339,11 @@ void initImgui() {
 
 	//clear font textures from cpu data
 	ImGui_ImplVulkan_DestroyFontUploadObjects();
+
+  igSetNextWindowPos((ImVec2){0.f,0.f}, 0, (ImVec2){0.f,0.f}); igSetNextWindowSize((ImVec2){320.f, 440.f}, 0);
 }
 void imguiFrame(float dt, float t_running, float *t, float *dropped_time) {
   bool my_bool = true;
-  igSetNextWindowPos((ImVec2){0.f,0.f}, 0, (ImVec2){0.f,0.f}); igSetNextWindowSize((ImVec2){320.f, 280.f}, 0);
   igBegin("Controls!", &my_bool, 0);
 
   if(igButton("Pause", (ImVec2){60.f,14.f})) {paused = !paused;}
@@ -1343,7 +1365,19 @@ void imguiFrame(float dt, float t_running, float *t, float *dropped_time) {
 
   igText("\nSECOND SET OF PARTICLES");
   igCheckbox("Show particles2 instead", &show_particles2);
-  igText("Avg dist from particles1: %.3lf", calcAvgDistSq(particles, particles2, n_particles));
+  igText("Particles2 sim uses grid heuristic,\nparticles1 uses naive O(n^2).\nThese sims are run simultaneously.");
+
+  static float values[90] = {};
+  static int values_offset = 0;
+  static double refresh_time = 0.0;
+  while (refresh_time < igGetTime()) { // Fill in values at fixed 60 Hz rate
+      values[values_offset] = calcAvgDistSq(particles, particles2, n_particles);
+      values_offset = (values_offset + 1) % 90;
+      refresh_time += 1.0f / 60.0f;
+  }
+  char overlay[32];
+  sprintf(overlay, "Avg dist from particles1 %.2f", calcAvgDistSq(particles,particles2,n_particles));
+  igPlotLines_FloatPtr("##l", values, 90, values_offset, overlay, .0f, 100.f, (ImVec2){280.f, 80.f}, sizeof(float));
 
   igEnd();
 }
@@ -1389,6 +1423,7 @@ void mainLoop() {
         ParticleGroupInteraction1(600,200, 400,200, forces[14],dt);
         ParticleGroupInteraction1(600,200, 600,200, forces[15],dt);
 
+        reconstructGrid();
         ParticleGroupInteraction2(  0,200,   0,200, forces[0],dt);
         ParticleGroupInteraction2(  0,200, 200,200, forces[1],dt);
         ParticleGroupInteraction2(  0,200, 400,200, forces[2],dt);
@@ -1466,6 +1501,7 @@ void run() {
   createParticleGroup(200,200, (vec3){.5f,.5f,0.1f});
   createParticleGroup(400,200, (vec3){.1f,.6f,0.f});
   createParticleGroup(600,200, (vec3){.05f,.05f,.5f});
+  initGrid();
 
   n_vertices = n_particles;
   printf("%d\n",n_vertices);

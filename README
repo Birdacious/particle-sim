@@ -1,2 +1,2 @@
 Particle simulation for a school project. Linux only for now. Requires Vulkan.
-Beware: horrendous code!
+Beware: horrendous code, all in a single source file.
