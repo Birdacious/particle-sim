@@ -1128,12 +1128,17 @@ void initVulkan() {
 typedef struct { float x,y,vx,vy; vec3 color; } Particle;
 #define n_particles 800
 Particle particles[n_particles];
-typedef struct {
-  struct GridCell *nw,*ne,*sw,*se;
-  float center_x,center_y,w,h;
-  unsigned int n_ps; kvec_t(unsigned int) particle_inds;
-} GridCell;
-GridCell grid;
+// typedef struct {
+//   struct GridCell *nw,*ne,*sw,*se;
+//   float center_x,center_y,w,h;
+//   unsigned int n_ps; kvec_t(unsigned int) particle_inds;
+// } GridCell;
+// GridCell grid;
+
+// If a grid cell has a length of max_interact_distance then only need to check the surrounding 8. But that is for max_interact_dist.
+// The point of this report is to have ALL particles interact no matter distance
+
+
 
 int seed = 41;
 bool paused = false;
@@ -1390,7 +1395,7 @@ void run() {
   ProfilerStart("out.prof");
   srand(0);
   createParticleGroup(0  ,200, (vec3){.7f,0.f,0.f});
-  createParticleGroup(200,  200, (vec3){.5f,.5f,0.1f});
+  createParticleGroup(200,200, (vec3){.5f,.5f,0.1f});
   createParticleGroup(400,200, (vec3){.1f,.6f,0.f});
   createParticleGroup(600,200, (vec3){.05f,.05f,.5f});
 
