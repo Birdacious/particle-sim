@@ -1142,6 +1142,7 @@ Particle particles2[n_particles];
 int seed = 41;
 bool paused = false;
 bool do_d_sq = false;
+bool show_particles2 = false;
 float max_interaction_dist = 150.f;
 float drag = 0.5;
 
@@ -1156,15 +1157,19 @@ void createParticleGroup(int start, int n, vec3 color) {
 		glm_vec3_copy(color, p.color);
     particles[i] = p;
 	}
+  memcpy(particles2+start, particles+start, sizeof(Particle)*n);
+  particles2[start].x = 27.f;
 }
-void updateParticleVertices() {
+void updateParticleVertices(bool show_particles2) {
+  Particle *ps = particles;
+  if(show_particles2) { ps = particles2; }
   for(int i=0; i<n_particles; i++) {
-    vertices[i].pos[0] = particles[i].x/50-1;
-    vertices[i].pos[1] = particles[i].y/50-1;
-    glm_vec3_copy(particles[i].color, vertices[i].color);
+    vertices[i].pos[0] = ps[i].x/50-1;
+    vertices[i].pos[1] = ps[i].y/50-1;
+    glm_vec3_copy(ps[i].color, vertices[i].color);
   }
 }
-void ParticleGroupInteraction(int i_gr1, size_t len_gr1, int i_gr2, size_t len_gr2, float g, float dt) {
+void ParticleGroupInteraction1(int i_gr1, size_t len_gr1, int i_gr2, size_t len_gr2, float g, float dt) {
   for(int i=i_gr1; i<i_gr1+len_gr1; i++) { float fx=0.f; float fy=0.f;
   for(int j=i_gr2; j<i_gr2+len_gr2; j++) {
 	  Particle a = particles[i];
@@ -1172,7 +1177,7 @@ void ParticleGroupInteraction(int i_gr1, size_t len_gr1, int i_gr2, size_t len_g
     float dx = a.x-b.x;
     float dy = a.y-b.y;
     float d_sq = dx*dx+dy*dy;
-    if(d_sq > 0.f && sqrtf(d_sq) < max_interaction_dist) { // && sqrtf(d_sq) < max_interaction dist
+    if(d_sq > 0.f && sqrtf(d_sq) < max_interaction_dist) {
       float F=0.f;
       if(do_d_sq) {
         F = g/d_sq;
@@ -1195,15 +1200,49 @@ void ParticleGroupInteraction(int i_gr1, size_t len_gr1, int i_gr2, size_t len_g
     particles[i] = a;
 	}}
 }
+void ParticleGroupInteraction2(int i_gr1, size_t len_gr1, int i_gr2, size_t len_gr2, float g, float dt) {
+  for(int i=i_gr1; i<i_gr1+len_gr1; i++) { float fx=0.f; float fy=0.f;
+  for(int j=i_gr2; j<i_gr2+len_gr2; j++) {
+	  Particle a = particles2[i];
+    Particle b = particles2[j];
+    float dx = a.x-b.x;
+    float dy = a.y-b.y;
+    float d_sq = dx*dx+dy*dy;
+    if(d_sq > 0.f && sqrtf(d_sq) < max_interaction_dist) {
+      float F=0.f;
+      if(do_d_sq) {
+        F = g/d_sq;
+      } else { F = g/sqrtf(d_sq); }
+
+      fx += F*dx;
+      fy += F*dy;
+    }
+    a.vx = (a.vx+fx)*drag;
+    a.vy = (a.vy+fy)*drag;
+
+    if(a.x <  0.f) a.vx = fabsf(a.vx)       ;
+    if(a.x >100.f) a.vx = fabsf(a.vx) * -1.f; 
+    if(a.y <  0.f) a.vy = fabsf(a.vy)       ;
+    if(a.y >100.f) a.vy = fabsf(a.vy) * -1.f;
+
+    a.x += a.vx * dt;
+    a.y += a.vy * dt;
+ 
+    particles2[i] = a;
+  }}
+}
+
 void reinitPositions(int seed) {
   srand(seed);
-  for(int i=0; i<800; i++) {
-    particles[i].x = (rand()/(float)RAND_MAX)*90+5;
-    particles[i].y = (rand()/(float)RAND_MAX)*90+5;
-    particles[i].vx = particles[i].vy = 0.f;
+  for(int i=0; i<n_particles; i++) {
+    particles[i].x = particles2[i].x = (rand()/(float)RAND_MAX)*90+5;
+    particles[i].y = particles2[i].y = (rand()/(float)RAND_MAX)*90+5;
+    particles[i].vx = particles[i].vy = particles2[i].vx = particles2[i].vy = 0.f;
 	}
+  memcpy(particles2, particles, sizeof(Particle)*n_particles);
+  //particles2[10].x = 20.f;
 }
-void capturePositionData(char *filename) { // TODO
+void captureDistanceData(char *filename) { // TODO
   
 }
 void reconstructGrid() { // TODO
@@ -1302,7 +1341,9 @@ void imguiFrame(float dt, float t_running, float *t, float *dropped_time) {
   igDragFloat4("grn", &forces[8],  .001f, -.5f, .5f, "%.3f",0);
   igDragFloat4("blu", &forces[12], .001f, -.5f, .5f, "%.3f",0);
 
-  igText("Avg dist b/t particles: %.3lf");
+  igText("\nSECOND SET OF PARTICLES");
+  igCheckbox("Show particles2 instead", &show_particles2);
+  igText("Avg dist from particles1: %.3lf", calcAvgDistSq(particles, particles2, n_particles));
 
   igEnd();
 }
@@ -1331,25 +1372,42 @@ void mainLoop() {
 
         // TODO bad code
         // (Well, ~especially~ bad code relative the rest of this)
-        ParticleGroupInteraction(  0,200,   0,200, forces[0],dt);
-        ParticleGroupInteraction(  0,200, 200,200, forces[1],dt);
-        ParticleGroupInteraction(  0,200, 400,200, forces[2],dt);
-        ParticleGroupInteraction(  0,200, 600,200, forces[3],dt);
-        ParticleGroupInteraction(200,200,   0,200, forces[4],dt);
-        ParticleGroupInteraction(200,200, 200,200, forces[5],dt);
-        ParticleGroupInteraction(200,200, 400,200, forces[6],dt);
-        ParticleGroupInteraction(200,200, 600,200, forces[7],dt);
-        ParticleGroupInteraction(400,200,   0,200, forces[8],dt);
-        ParticleGroupInteraction(400,200, 200,200, forces[9],dt);
-        ParticleGroupInteraction(400,200, 400,200, forces[10],dt);
-        ParticleGroupInteraction(400,200, 600,200, forces[11],dt);
-        ParticleGroupInteraction(600,200,   0,200, forces[12],dt);
-        ParticleGroupInteraction(600,200, 200,200, forces[13],dt);
-        ParticleGroupInteraction(600,200, 400,200, forces[14],dt);
-        ParticleGroupInteraction(600,200, 600,200, forces[15],dt);
+        ParticleGroupInteraction1(  0,200,   0,200, forces[0],dt);
+        ParticleGroupInteraction1(  0,200, 200,200, forces[1],dt);
+        ParticleGroupInteraction1(  0,200, 400,200, forces[2],dt);
+        ParticleGroupInteraction1(  0,200, 600,200, forces[3],dt);
+        ParticleGroupInteraction1(200,200,   0,200, forces[4],dt);
+        ParticleGroupInteraction1(200,200, 200,200, forces[5],dt);
+        ParticleGroupInteraction1(200,200, 400,200, forces[6],dt);
+        ParticleGroupInteraction1(200,200, 600,200, forces[7],dt);
+        ParticleGroupInteraction1(400,200,   0,200, forces[8],dt);
+        ParticleGroupInteraction1(400,200, 200,200, forces[9],dt);
+        ParticleGroupInteraction1(400,200, 400,200, forces[10],dt);
+        ParticleGroupInteraction1(400,200, 600,200, forces[11],dt);
+        ParticleGroupInteraction1(600,200,   0,200, forces[12],dt);
+        ParticleGroupInteraction1(600,200, 200,200, forces[13],dt);
+        ParticleGroupInteraction1(600,200, 400,200, forces[14],dt);
+        ParticleGroupInteraction1(600,200, 600,200, forces[15],dt);
+
+        ParticleGroupInteraction2(  0,200,   0,200, forces[0],dt);
+        ParticleGroupInteraction2(  0,200, 200,200, forces[1],dt);
+        ParticleGroupInteraction2(  0,200, 400,200, forces[2],dt);
+        ParticleGroupInteraction2(  0,200, 600,200, forces[3],dt);
+        ParticleGroupInteraction2(200,200,   0,200, forces[4],dt);
+        ParticleGroupInteraction2(200,200, 200,200, forces[5],dt);
+        ParticleGroupInteraction2(200,200, 400,200, forces[6],dt);
+        ParticleGroupInteraction2(200,200, 600,200, forces[7],dt);
+        ParticleGroupInteraction2(400,200,   0,200, forces[8],dt);
+        ParticleGroupInteraction2(400,200, 200,200, forces[9],dt);
+        ParticleGroupInteraction2(400,200, 400,200, forces[10],dt);
+        ParticleGroupInteraction2(400,200, 600,200, forces[11],dt);
+        ParticleGroupInteraction2(600,200,   0,200, forces[12],dt);
+        ParticleGroupInteraction2(600,200, 200,200, forces[13],dt);
+        ParticleGroupInteraction2(600,200, 400,200, forces[14],dt);
+        ParticleGroupInteraction2(600,200, 600,200, forces[15],dt);
       }
 
-      updateParticleVertices();
+      updateParticleVertices(show_particles2);
     }
   
 		glfwPollEvents();
