@@ -1128,6 +1128,7 @@ void initVulkan() {
 typedef struct { float x,y,vx,vy; vec3 color; } Particle;
 #define n_particles 800
 Particle particles[n_particles];
+Particle particles2[n_particles];
 // typedef struct {
 //   struct GridCell *nw,*ne,*sw,*se;
 //   float center_x,center_y,w,h;
@@ -1138,11 +1139,11 @@ Particle particles[n_particles];
 // If a grid cell has a length of max_interact_distance then only need to check the surrounding 8. But that is for max_interact_dist.
 // The point of this report is to have ALL particles interact no matter distance
 
-
-
 int seed = 41;
 bool paused = false;
-float max_interaction_dist = 20.f;
+bool do_d_sq = false;
+float max_interaction_dist = 150.f;
+float drag = 0.5;
 
 float forces[16] = {0};
 
@@ -1170,30 +1171,26 @@ void ParticleGroupInteraction(int i_gr1, size_t len_gr1, int i_gr2, size_t len_g
     Particle b = particles[j];
     float dx = a.x-b.x;
     float dy = a.y-b.y;
-    float d = sqrtf(dx*dx+dy*dy);
-    if(d > 0.f && d < max_interaction_dist) {
-      float F = g/d;
+    float d_sq = dx*dx+dy*dy;
+    if(d_sq > 0.f && sqrtf(d_sq) < max_interaction_dist) { // && sqrtf(d_sq) < max_interaction dist
+      float F=0.f;
+      if(do_d_sq) {
+        F = g/d_sq;
+      } else { F = g/sqrtf(d_sq); }
+
       fx += F*dx;
       fy += F*dy;
     }
-    a.vx = (a.vx+fx)*.5f; // *.5 to add "drag"
-    a.vy = (a.vy+fy)*.5f;
-
-    /* Not physically correct (distance vec not normalized, and distance not squared). And in fact, d^2 would be computationally faster b/c can cancel some things out.
-       However, more interesting patterns with unsquared distance. D^2 seems to cause lots of attracting particles to just form "black holes" where particles continuously
-       get sucked towards a center until they get really close, then the force explodes when d^2 gets really small in g/d^2 and they shoot out a little ways to the other end,
-       only to get sucked back in again. Not very interesting.
-       Anyway, not doing collision detection, so the goal is not to be realistic anyways.
-       Particles are not meant to represent atoms nor bodies in space, the lack of collision detection and linear d makes it more like a cytoplasmic environment (roughly). 
-    */
+    a.vx = (a.vx+fx)*drag;
+    a.vy = (a.vy+fy)*drag;
 
     if(a.x <  0.f) a.vx = fabsf(a.vx)       ;
     if(a.x >100.f) a.vx = fabsf(a.vx) * -1.f; 
     if(a.y <  0.f) a.vy = fabsf(a.vy)       ;
     if(a.y >100.f) a.vy = fabsf(a.vy) * -1.f;
 
-    a.y += a.vy * dt;
     a.x += a.vx * dt;
+    a.y += a.vy * dt;
  
     particles[i] = a;
 	}}
@@ -1212,7 +1209,16 @@ void capturePositionData(char *filename) { // TODO
 void reconstructGrid() { // TODO
   // Traverse total "particles". Based on the particles' positions put in appropriate grid cell.
 }
-
+double calcAvgDistSq(Particle ps1[], Particle ps2[], int n) {
+  double sum = 0.;
+  for(int i=0; i<n; i++) {
+    float dx = ps1[i].x - ps2[i].x;
+    float dy = ps1[i].y - ps2[i].y;
+    float d = sqrtf(dx*dx+dy*dy);
+    sum+=d;
+  }
+  return sum/n;
+}
 
 // IMGUI STUFF
 void initImgui() {
@@ -1276,23 +1282,27 @@ void initImgui() {
 }
 void imguiFrame(float dt, float t_running, float *t, float *dropped_time) {
   bool my_bool = true;
-  igSetNextWindowPos((ImVec2){0.f,0.f}, 0, (ImVec2){0.f,0.f}); igSetNextWindowSize((ImVec2){320.f, 240.f}, 0);
+  igSetNextWindowPos((ImVec2){0.f,0.f}, 0, (ImVec2){0.f,0.f}); igSetNextWindowSize((ImVec2){320.f, 280.f}, 0);
   igBegin("Controls!", &my_bool, 0);
 
   if(igButton("Pause", (ImVec2){60.f,14.f})) {paused = !paused;}
   igText("Running time: %03.0fs | FPS: %.0f", t_running, igGetIO()->Framerate);
   igText("Physics time: %03.0fs | TPS: %.0f/%.0f", *t, fminf(1.f/dt, igGetIO()->Framerate), 1/dt);
-  igText("Dropped physics time: %.3f", *dropped_time);
+  igText("Delayed physics time: %.3f", *dropped_time);
   if(igButton("Reinit", (ImVec2){60.f,14.f})) { *dropped_time += *t; *t = 0; reinitPositions(seed);} igSameLine(60.f,20.f); igDragInt("##", &seed, .1f, 0, UINT32_MAX, "seed: %d", 0);
 
   // TODO: randomize forces button, followed by sliders for a bunch of forces
   igText("\nCONTROL INTER-PARTICLE FORCES");
-  igDragFloat("##a", &max_interaction_dist, 0.1f, 0.f, 100.f, "Interaction distance: %.1f",0);
+  igCheckbox("Interact based on d^2?", &do_d_sq);
+  igDragFloat("##a", &max_interaction_dist, 1.f, 0.f, 150.f, "Interaction distance: %.1f",0);
+  igDragFloat("##d", &drag, .001f, 0.f, 1.f, "Drag: %.3f", 0);
   if(igButton("Randomize", (ImVec2){80.f,14.f})) { for(int i=0; i<16; i++) forces[i] = (rand()/(float)RAND_MAX)*1.f - .5f; }
   igDragFloat4("red", forces,      .001f, -.5f, .5f, "%.3f",0);
   igDragFloat4("yel", &forces[4],  .001f, -.5f, .5f, "%.3f",0);
   igDragFloat4("grn", &forces[8],  .001f, -.5f, .5f, "%.3f",0);
   igDragFloat4("blu", &forces[12], .001f, -.5f, .5f, "%.3f",0);
+
+  igText("Avg dist b/t particles: %.3lf");
 
   igEnd();
 }
@@ -1310,7 +1320,7 @@ void mainLoop() {
     printf("%f\r",t_running-t);
 
     // Fixed timestep. Physics not harmed by FPS fluctuations.
-    // Can drop physics ticks. I.e. If paused or FPS dips, don't go superspeed to try to catch back up.
+    // Can drop/delay physics ticks. I.e. If paused or FPS dips, don't go superspeed to try to catch back up.
     if(t_running-t-total_dropped_time > dt) {
       drop_phys_time = t_running-t-total_dropped_time-dt;
       drop_phys_time = drop_phys_time - fmodf(drop_phys_time,dt);
