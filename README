@@ -1,2 +1,2 @@
-Particle simulation for a school project. Linux only for now. Requires Vulkan.
+Particle simulation for a school project. Linux only for now. Requires Vulkan. To run, simply "make run".
 Beware: horrendous code!
