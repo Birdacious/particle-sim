@@ -238,7 +238,7 @@ VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR capabilities) {
 
 		VkExtent2D actual_extent = { (uint32_t)width, (uint32_t)height };
 
-		printf("%d, %d\n", actual_extent.width, actual_extent.height);
+		//printf("%d, %d\n", actual_extent.width, actual_extent.height);
 		uint32_t w,h,miw,maw,mih,mah;
 		  w = actual_extent.width;                   h = actual_extent.height;
 		miw = capabilities.minImageExtent.width; mih = capabilities.minImageExtent.height;
@@ -333,7 +333,7 @@ bool isDeviceSuitable(VkPhysicalDevice phys_dev) {
 		free(swapchain_support.formats); free(swapchain_support.presentModes); // FREE'D swapchain_support
 	}
 	
-	printf("%u, %u, %u\n", inds.graphicsFamily, inds.presentFamily, UINT32_MAX);
+	//printf("%u, %u, %u\n", inds.graphicsFamily, inds.presentFamily, UINT32_MAX);
 	return (inds.graphicsFamily != UINT32_MAX &&
 			    inds.presentFamily != UINT32_MAX &&
 					supports_extensions &&
@@ -346,7 +346,7 @@ void pickPhysicalDevice() {
 	if(n_phys_dev==0) {printf("No Vulkan-compatible GPUs! :(");}
 	VkPhysicalDevice phys_devs[n_phys_dev];
 	vkEnumeratePhysicalDevices(instance, &n_phys_dev, phys_devs);
-	printf("%u = ndev\n",n_phys_dev);
+	//printf("%u = ndev\n",n_phys_dev);
 
 	for(uint32_t i=0; i<n_phys_dev; i++) {
 		VkPhysicalDevice phys_dev = phys_devs[i];
@@ -1134,11 +1134,11 @@ Particle particles[n_particles];
 Particle particles2[n_particles];
 typedef struct {
   float corner_x,corner_y, w,h, center_x,center_y;
-  kvec_t(Particle*) ps; // Can just store pointers to particles instead of inds b/c main particles arrays are never reallocated.
   float avg_force; // TODO
+  kvec_t(int) ps; // Can just store pointers to particles instead of inds b/c main particles arrays are never reallocated.
 } GridCell;
 #define n_gridcells 100
-GridCell grid[n_gridcells];
+GridCell *grid;
 
 // If a grid cell has a length of max_interact_distance then only need to check the surrounding 8. But that is for max_interact_dist.
 // The point of this report is to have ALL particles interact no matter distance
@@ -1148,7 +1148,8 @@ bool paused = false;
 bool do_d_sq = false;
 bool show_particles2 = false;
 float max_interaction_dist = 150.f;
-float drag = 0.5;
+float antidrag = .5f; // 1-drag
+float max_rand_force = .5f;
 
 float forces[16] = {0};
 
@@ -1190,16 +1191,16 @@ void ParticleGroupInteraction1(int i_gr1, size_t len_gr1, int i_gr2, size_t len_
       fx += F*dx;
       fy += F*dy;
     }
-    a.vx = (a.vx+fx)*drag;
-    a.vy = (a.vy+fy)*drag;
-
-    if(a.x <  0.f) a.vx = fabsf(a.vx)       ;
-    if(a.x >100.f) a.vx = fabsf(a.vx) * -1.f; 
-    if(a.y <  0.f) a.vy = fabsf(a.vy)       ;
-    if(a.y >100.f) a.vy = fabsf(a.vy) * -1.f;
+    a.vx = (a.vx+fx)*(1-antidrag);
+    a.vy = (a.vy+fy)*(1-antidrag);
 
     a.x += a.vx * dt;
     a.y += a.vy * dt;
+
+    if(a.x <  0.f) {a.vx = fabsf(a.vx)       ; a.x=  0.f;}
+    if(a.x >100.f) {a.vx = fabsf(a.vx) * -1.f; a.x=100.f;}
+    if(a.y <  0.f) {a.vy = fabsf(a.vy)       ; a.y=  0.f;}
+    if(a.y >100.f) {a.vy = fabsf(a.vy) * -1.f; a.y=100.f;}
  
     particles[i] = a;
 	}}
@@ -1221,16 +1222,16 @@ void ParticleGroupInteraction2(int i_gr1, size_t len_gr1, int i_gr2, size_t len_
       fx += F*dx;
       fy += F*dy;
     }
-    a.vx = (a.vx+fx)*drag;
-    a.vy = (a.vy+fy)*drag;
-
-    if(a.x <  0.f) a.vx = fabsf(a.vx)       ;
-    if(a.x >100.f) a.vx = fabsf(a.vx) * -1.f; 
-    if(a.y <  0.f) a.vy = fabsf(a.vy)       ;
-    if(a.y >100.f) a.vy = fabsf(a.vy) * -1.f;
+    a.vx = (a.vx+fx)*(1-antidrag);
+    a.vy = (a.vy+fy)*(1-antidrag);
 
     a.x += a.vx * dt;
     a.y += a.vy * dt;
+
+    if(a.x <  0.f) {a.vx = fabsf(a.vx)       ; a.x=  0.f;}
+    if(a.x >100.f) {a.vx = fabsf(a.vx) * -1.f; a.x=100.f;}
+    if(a.y <  0.f) {a.vy = fabsf(a.vy)       ; a.y=  0.f;}
+    if(a.y >100.f) {a.vy = fabsf(a.vy) * -1.f; a.y=100.f;}
  
     particles2[i] = a;
   }}
@@ -1250,23 +1251,39 @@ void captureDistanceData(char *filename) { // TODO
 }
 void initGrid() {
   // Note: canvas where the physics happen is 100x100 arbitrary units.
+  grid = malloc(sizeof(GridCell)*n_gridcells);
   int a = sqrt(n_gridcells); if(a*a != n_gridcells) {printf("n_gridcells must be a square number!");}
   for(int i=0; i<a; i++) {
   for(int j=0; j<a; j++) {
     grid[a*i+j].center_x = 100/a*j + a/2;
     grid[a*i+j].center_y = 100/a*i + a/2;
     grid[a*i+j].w = grid[a*i+j].h = 100/a;
+    //printf("%d:%.0f,%.0f ", a*i+j,grid[a*i+j].center_x,grid[a*i+j].center_y); // good
     kv_init(grid[a*i+j].ps);
   }}
 }
 void reconstructGrid() { // TODO
-  // Traverse total "particles". Based on the particles' positions put in appropriate grid cell.
   int a = sqrt(n_gridcells);
+
+  for(int i=0; i<a; i++) {
+  for(int j=0; j<a; j++) {
+	//printf("%ld ", grid[a*i+j].ps.n);
+    kv_destroy(grid[a*i+j].ps);
+    kv_init(grid[a*i+j].ps);
+  }}
+
+  // Traverse all particles. Based on the particles' positions put in appropriate grid cell.
   for(int k=0; k<n_particles; k++) {
-    int i = particles2[k].x / a;
-    int j = particles2[k].y / a;
-    printf("%d%d   ",i,j);
-    //kv_push(Particle*, grid[i*a+j].ps, &particles2[k]); // TODO: segfualts, invalid write of 8
+    int i = particles2[k].y / a;
+    int j = particles2[k].x / a;
+    if(i>9){i=9;} if(j>9){j=9;} // b/c if at very edge will be a perfect 100 /10 = 10, which will cause i*a+j to go oob (>index99)
+    //if(i<0 || i>9 || j<0 || j>9) printf("UH OH! i,j:%d,%d\n",i,j);
+    //printf("%d:%ld ", a*i+j, sizeof(int)*(grid[i*a+j].ps).n);
+    kv_push(int, grid[i*a+j].ps, k);
+  }
+
+  for(int i; i<n_gridcells; i++) {
+
   }
 }
 double calcAvgDistSq(Particle ps1[], Particle ps2[], int n) {
@@ -1356,8 +1373,9 @@ void imguiFrame(float dt, float t_running, float *t, float *dropped_time) {
   igText("\nCONTROL INTER-PARTICLE FORCES");
   igCheckbox("Interact based on d^2?", &do_d_sq);
   igDragFloat("##a", &max_interaction_dist, 1.f, 0.f, 150.f, "Interaction distance: %.1f",0);
-  igDragFloat("##d", &drag, .001f, 0.f, 1.f, "Drag: %.3f", 0);
-  if(igButton("Randomize", (ImVec2){80.f,14.f})) { for(int i=0; i<16; i++) forces[i] = (rand()/(float)RAND_MAX)*1.f - .5f; }
+  igDragFloat("##d", &antidrag, .001f, 0.f, 1.f, "Drag: %.3f", 0);
+  if(igButton("Randomize", (ImVec2){80.f,14.f})) { for(int i=0; i<16; i++) forces[i] = (rand()/(float)RAND_MAX)*max_rand_force - max_rand_force/2.f; }
+  igDragFloat("##m", &max_rand_force, .001f, 0.f, 1.f, "Randomizer max: %.3f", 0);
   igDragFloat4("red", forces,      .001f, -.5f, .5f, "%.3f",0);
   igDragFloat4("yel", &forces[4],  .001f, -.5f, .5f, "%.3f",0);
   igDragFloat4("grn", &forces[8],  .001f, -.5f, .5f, "%.3f",0);
@@ -1392,7 +1410,7 @@ void mainLoop() {
 	while(!glfwWindowShouldClose(window)) {
     struct timespec ts_current; timespec_get(&ts_current,  TIME_UTC);
     t_running = (ts_current.tv_sec-ts_app_start.tv_sec) + ((ts_current.tv_nsec-ts_app_start.tv_nsec)/1e9);
-    printf("%f\r",t_running-t);
+    //printf("%f\r",t_running-t);
 
     // Fixed timestep. Physics not harmed by FPS fluctuations.
     // Can drop/delay physics ticks. I.e. If paused or FPS dips, don't go superspeed to try to catch back up.
@@ -1504,7 +1522,7 @@ void run() {
   initGrid();
 
   n_vertices = n_particles;
-  printf("%d\n",n_vertices);
+  //printf("%d\n",n_vertices);
   vertices = malloc(sizeof(Vertex)*n_vertices);
 
 	initWindow();
