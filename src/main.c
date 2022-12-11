@@ -1134,7 +1134,7 @@ Particle particles[n_particles];
 Particle particles2[n_particles];
 typedef struct {
   float corner_x,corner_y, w,h, center_x,center_y;
-  float avg_force; // TODO
+  float afr,afy,afg,afb; // Averaged force on <color>
   kvec_t(int) ps; // Can just store pointers to particles instead of inds b/c main particles arrays are never reallocated.
 } GridCell;
 #define n_gridcells 100
@@ -1282,8 +1282,16 @@ void reconstructGrid() { // TODO
     kv_push(int, grid[i*a+j].ps, k);
   }
 
-  for(int i; i<n_gridcells; i++) {
-
+  for(int i=0; i<n_gridcells; i++) {
+    int nr=0,ny=0,ng=0,nb=0;
+    for(int j=0; j<kv_size(grid[i].ps); j++) {
+      int c = kv_A(grid[i].ps, j);
+      c<200? nr++ : c<400? ny++ : c<600? ng++ : nb++;
+    }
+    grid[i].afr = forces[0]*nr  + forces[1]*ny  + forces[2]*ng  + forces[3]*nb;
+    grid[i].afy = forces[4]*nr  + forces[5]*ny  + forces[6]*ng  + forces[7]*nb;
+    grid[i].afg = forces[8]*nr  + forces[9]*ny  + forces[10]*ng + forces[11]*nb;
+    grid[i].afb = forces[12]*nr + forces[13]*ny + forces[14]*ng + forces[15]*nb;
   }
 }
 double calcAvgDistSq(Particle ps1[], Particle ps2[], int n) {
@@ -1371,7 +1379,7 @@ void imguiFrame(float dt, float t_running, float *t, float *dropped_time) {
 
   // TODO: randomize forces button, followed by sliders for a bunch of forces
   igText("\nCONTROL INTER-PARTICLE FORCES");
-  igCheckbox("Interact based on d^2?", &do_d_sq);
+  igCheckbox("Divide force by d?", &do_d_sq);
   igDragFloat("##a", &max_interaction_dist, 1.f, 0.f, 150.f, "Interaction distance: %.1f",0);
   igDragFloat("##d", &antidrag, .001f, 0.f, 1.f, "Drag: %.3f", 0);
   if(igButton("Randomize", (ImVec2){80.f,14.f})) { for(int i=0; i<16; i++) forces[i] = (rand()/(float)RAND_MAX)*max_rand_force - max_rand_force/2.f; }
