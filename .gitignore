@@ -2,3 +2,4 @@ examples/
 out
 .vscode/
 out.prof
+out.callgrind

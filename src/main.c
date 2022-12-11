@@ -1163,7 +1163,6 @@ void createParticleGroup(int start, int n, vec3 color) {
     particles[i] = p;
 	}
   memcpy(particles2+start, particles+start, sizeof(Particle)*n);
-  particles2[start].x = 27.f;
 }
 void updateParticleVertices(bool show_particles2) {
   Particle *ps = particles;
@@ -1174,11 +1173,11 @@ void updateParticleVertices(bool show_particles2) {
     glm_vec3_copy(ps[i].color, vertices[i].color);
   }
 }
-void ParticleGroupInteraction1(int i_gr1, size_t len_gr1, int i_gr2, size_t len_gr2, float g, float dt) {
+void ParticleGroupInteraction1(int i_gr1, size_t len_gr1, int i_gr2, size_t len_gr2, float g, float dt, Particle ps[]) {
   for(int i=i_gr1; i<i_gr1+len_gr1; i++) { float fx=0.f; float fy=0.f;
   for(int j=i_gr2; j<i_gr2+len_gr2; j++) {
-	  Particle a = particles[i];
-    Particle b = particles[j];
+	  Particle a = ps[i];
+    Particle b = ps[j];
     float dx = a.x-b.x;
     float dy = a.y-b.y;
     float d_sq = dx*dx+dy*dy;
@@ -1202,17 +1201,53 @@ void ParticleGroupInteraction1(int i_gr1, size_t len_gr1, int i_gr2, size_t len_
     if(a.y <  0.f) {a.vy = fabsf(a.vy)       ; a.y=  0.f;}
     if(a.y >100.f) {a.vy = fabsf(a.vy) * -1.f; a.y=100.f;}
  
-    particles[i] = a;
+    ps[i] = a;
 	}}
 }
-void ParticleGroupInteraction2(int i_gr1, size_t len_gr1, int i_gr2, size_t len_gr2, float g, float dt) {
-  for(int i=i_gr1; i<i_gr1+len_gr1; i++) { float fx=0.f; float fy=0.f;
-  for(int j=i_gr2; j<i_gr2+len_gr2; j++) {
-	  Particle a = particles2[i];
-    Particle b = particles2[j];
-    float dx = a.x-b.x;
-    float dy = a.y-b.y;
+void ParticleGroupInteraction2(int i_gr1, size_t len_gr1, float dt) {
+  // Sheesh this is the worst code I've ever written but it's the home stretch
+  // kvec_t(int) gc_inds;
+  for(int p=i_gr1; p<i_gr1+len_gr1; p++) { float fx=0.f; float fy=0.f;
+      // int l = sqrt(n_gridcells);
+      // int gy = particles2[p].y / l;
+      // int gx = particles2[p].x / l;
+      // if(gx>9){gx=9;} if(gy>9){gy=9;}
+      // kv_init(gc_inds);
+      // kv_push(int,gc_inds,l*(gy)+(gx));
+      // kv_push(int,gc_inds,l*(gy-1)+(gx));
+      // kv_push(int,gc_inds,l*(gy+1)+(gx));
+      // kv_push(int,gc_inds,l*(gy)+(gx-1));
+      // kv_push(int,gc_inds,l*(gy-1)+(gx-1));
+      // kv_push(int,gc_inds,l*(gy+1)+(gx-1));
+      // kv_push(int,gc_inds,l*(gy)+(gx+1));
+      // kv_push(int,gc_inds,l*(gy-1)+(gx+1));
+      // kv_push(int,gc_inds,l*(gy+1)+(gx+1));
+
+      // for(int gcii=0; gcii<kv_size(gc_inds); gcii++) {
+      //   int gci = kv_A(gc_inds,gcii);
+      //   if(gci<0 || gci>99) continue;
+      //   for(int pa=0; pa<kv_size(grid[gci].ps); pa++) {
+      //     int p_ind = kv_A(grid[gci].ps, pa);
+
+      //     int f_ind = 4*(i_gr1<200? 0 : i_gr1<400? 1 : i_gr1<600? 2 : 3) + (p_ind<200? 0 : p_ind<400? 1 : p_ind<600? 2 : 3);
+      //     float g = forces[f_ind];
+      //     ParticleGroupInteraction1(p,1, p_ind,1, g, dt, particles2);
+      // }}
+      // kv_destroy(gc_inds);
+
+  for(int j=0; j<n_gridcells; j++) {
+    // if(j/l <= gy+1 && j/l >= gy-1 &&
+    //    j%l <= gx+1 && j%l >= gx-1) continue; // skip the 9x9 self/adjacent grid cells, skip, calc full accuracy interactions above instead
+    //if(j/l==gy && j%l==gx) continue; // only skip own grid cell
+
+	  Particle a = particles2[p];
+    GridCell c = grid[j];
+    float dx = a.x-c.center_x;
+    float dy = a.y-c.center_y;
     float d_sq = dx*dx+dy*dy;
+
+    // dumb messy code but running out of time so :(
+    float g = i_gr1<200? c.afr : i_gr1<400? c.afy : i_gr1<600? c.afg : c.afb;
     if(d_sq > 0.f && sqrtf(d_sq) < max_interaction_dist) {
       float F=0.f;
       if(do_d_sq) {
@@ -1225,6 +1260,10 @@ void ParticleGroupInteraction2(int i_gr1, size_t len_gr1, int i_gr2, size_t len_
     a.vx = (a.vx+fx)*(1-antidrag);
     a.vy = (a.vy+fy)*(1-antidrag);
 
+    // Is the issue that drag is not applied as much to grid cell interactions?
+    // a.vx = (a.vx+fx)*powf((1-antidrag),(float)kv_size(c.ps));
+    // a.vy = (a.vy+fy)*powf((1-antidrag),(float)kv_size(c.ps));
+
     a.x += a.vx * dt;
     a.y += a.vy * dt;
 
@@ -1233,7 +1272,7 @@ void ParticleGroupInteraction2(int i_gr1, size_t len_gr1, int i_gr2, size_t len_
     if(a.y <  0.f) {a.vy = fabsf(a.vy)       ; a.y=  0.f;}
     if(a.y >100.f) {a.vy = fabsf(a.vy) * -1.f; a.y=100.f;}
  
-    particles2[i] = a;
+    particles2[p] = a;
   }}
 }
 
@@ -1432,40 +1471,28 @@ void mainLoop() {
 
         // TODO bad code
         // (Well, ~especially~ bad code relative the rest of this)
-        ParticleGroupInteraction1(  0,200,   0,200, forces[0],dt);
-        ParticleGroupInteraction1(  0,200, 200,200, forces[1],dt);
-        ParticleGroupInteraction1(  0,200, 400,200, forces[2],dt);
-        ParticleGroupInteraction1(  0,200, 600,200, forces[3],dt);
-        ParticleGroupInteraction1(200,200,   0,200, forces[4],dt);
-        ParticleGroupInteraction1(200,200, 200,200, forces[5],dt);
-        ParticleGroupInteraction1(200,200, 400,200, forces[6],dt);
-        ParticleGroupInteraction1(200,200, 600,200, forces[7],dt);
-        ParticleGroupInteraction1(400,200,   0,200, forces[8],dt);
-        ParticleGroupInteraction1(400,200, 200,200, forces[9],dt);
-        ParticleGroupInteraction1(400,200, 400,200, forces[10],dt);
-        ParticleGroupInteraction1(400,200, 600,200, forces[11],dt);
-        ParticleGroupInteraction1(600,200,   0,200, forces[12],dt);
-        ParticleGroupInteraction1(600,200, 200,200, forces[13],dt);
-        ParticleGroupInteraction1(600,200, 400,200, forces[14],dt);
-        ParticleGroupInteraction1(600,200, 600,200, forces[15],dt);
+        ParticleGroupInteraction1(  0,200,   0,200, forces[0], dt,particles);
+        ParticleGroupInteraction1(  0,200, 200,200, forces[1], dt,particles);
+        ParticleGroupInteraction1(  0,200, 400,200, forces[2], dt,particles);
+        ParticleGroupInteraction1(  0,200, 600,200, forces[3], dt,particles);
+        ParticleGroupInteraction1(200,200,   0,200, forces[4], dt,particles);
+        ParticleGroupInteraction1(200,200, 200,200, forces[5], dt,particles);
+        ParticleGroupInteraction1(200,200, 400,200, forces[6], dt,particles);
+        ParticleGroupInteraction1(200,200, 600,200, forces[7], dt,particles);
+        ParticleGroupInteraction1(400,200,   0,200, forces[8], dt,particles);
+        ParticleGroupInteraction1(400,200, 200,200, forces[9], dt,particles);
+        ParticleGroupInteraction1(400,200, 400,200, forces[10],dt,particles);
+        ParticleGroupInteraction1(400,200, 600,200, forces[11],dt,particles);
+        ParticleGroupInteraction1(600,200,   0,200, forces[12],dt,particles);
+        ParticleGroupInteraction1(600,200, 200,200, forces[13],dt,particles);
+        ParticleGroupInteraction1(600,200, 400,200, forces[14],dt,particles);
+        ParticleGroupInteraction1(600,200, 600,200, forces[15],dt,particles);
 
         reconstructGrid();
-        ParticleGroupInteraction2(  0,200,   0,200, forces[0],dt);
-        ParticleGroupInteraction2(  0,200, 200,200, forces[1],dt);
-        ParticleGroupInteraction2(  0,200, 400,200, forces[2],dt);
-        ParticleGroupInteraction2(  0,200, 600,200, forces[3],dt);
-        ParticleGroupInteraction2(200,200,   0,200, forces[4],dt);
-        ParticleGroupInteraction2(200,200, 200,200, forces[5],dt);
-        ParticleGroupInteraction2(200,200, 400,200, forces[6],dt);
-        ParticleGroupInteraction2(200,200, 600,200, forces[7],dt);
-        ParticleGroupInteraction2(400,200,   0,200, forces[8],dt);
-        ParticleGroupInteraction2(400,200, 200,200, forces[9],dt);
-        ParticleGroupInteraction2(400,200, 400,200, forces[10],dt);
-        ParticleGroupInteraction2(400,200, 600,200, forces[11],dt);
-        ParticleGroupInteraction2(600,200,   0,200, forces[12],dt);
-        ParticleGroupInteraction2(600,200, 200,200, forces[13],dt);
-        ParticleGroupInteraction2(600,200, 400,200, forces[14],dt);
-        ParticleGroupInteraction2(600,200, 600,200, forces[15],dt);
+        ParticleGroupInteraction2(  0,200,dt);
+        ParticleGroupInteraction2(200,200,dt);
+        ParticleGroupInteraction2(400,200,dt);
+        ParticleGroupInteraction2(600,200,dt);
       }
 
       updateParticleVertices(show_particles2);
